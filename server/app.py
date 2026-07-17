@@ -25,6 +25,7 @@ from camera.behavior_detector import BehaviorDetector
 from notifier.wechat import send_pet_report, send_alert
 from storage.schema import Event, Pet
 from storage.repository import EventRepository, PetRepository, ReportRepository
+from auth.router import router as auth_router
 
 # ========== 日志 ==========
 logging.basicConfig(
@@ -77,6 +78,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 挂载认证路由
+app.include_router(auth_router)
+
 
 
 # ========== 数据模型 ==========

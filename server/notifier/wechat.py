@@ -1,31 +1,37 @@
-"""
-notifier/wechat.py
+"""notifier/wechat.py
 微信通知服务
 支持: 企业微信机器人 / Server酱
 """
 import logging
+import os
 from typing import Dict
 
 import requests
 
 logger = logging.getLogger("pet_translator.notifier")
 
-# 环境变量或配置文件注入
-SERVERCHAN_KEY = "YOUR_SERVERCHAN_KEY"
-WECHAT_WEBHOOK = "YOUR_WECOM_WEBHOOK_URL"
+
+def _get_wechat_webhook() -> str:
+    return os.environ.get("WECHAT_WEBHOOK", "")
+
+
+def _get_serverchan_key() -> str:
+    return os.environ.get("SERVERCHAN_KEY", "")
 
 
 def send_pet_report(report: Dict) -> Dict:
     """发送每日宠物精神状态报告"""
-    if WECHAT_WEBHOOK and "qyapi.weixin.qq.com" in WECHAT_WEBHOOK:
-        return _send_wecom(report)
-    if SERVERCHAN_KEY and SERVERCHAN_KEY != "YOUR_SERVERCHAN_KEY":
-        return _send_serverchan(report)
-    logger.warning("⚠️ 未配置微信推送服务，报告已生成但未发送")
+    webhook = _get_wechat_webhook()
+    sckey = _get_serverchan_key()
+    if webhook and "qyapi.weixin.qq.com" in webhook:
+        return _send_wecom(report, webhook)
+    if sckey:
+        return _send_serverchan(report, sckey)
+    logger.warning("⚠️ 未配置微信推送服务 (设置 WECHAT_WEBHOOK 或 SERVERCHAN_KEY 环境变量)")
     return {"status": "skipped", "reason": "未配置推送服务"}
 
 
-def _send_wecom(report: Dict) -> Dict:
+def _send_wecom(report: Dict, webhook: str) -> Dict:
     """企业微信机器人 Webhook 推送 (Markdown 格式)"""
     health_emoji = {
         "😊 精神状态良好": "😊",
@@ -47,19 +53,13 @@ def _send_wecom(report: Dict) -> Dict:
         "",
         f"## 💡 陪玩建议",
     ]
-
     for s in report.get("suggestions", []):
         md_lines.append(f"- {s}")
-
     md_content = "\n".join(md_lines)
 
-    payload = {
-        "msgtype": "markdown",
-        "markdown": {"content": md_content},
-    }
-
+    payload = {"msgtype": "markdown", "markdown": {"content": md_content}}
     try:
-        resp = requests.post(WECHAT_WEBHOOK, json=payload, timeout=10)
+        resp = requests.post(webhook, json=payload, timeout=10)
         result = resp.json()
         logger.info(f"✅ 企业微信推送成功: {result}")
         return {"status": "sent", "channel": "wecom", "result": result}
@@ -68,16 +68,13 @@ def _send_wecom(report: Dict) -> Dict:
         return {"status": "error", "error": str(e)}
 
 
-def _send_serverchan(report: Dict) -> Dict:
+def _send_serverchan(report: Dict, sckey: str) -> Dict:
     """Server酱 微信推送"""
     title = f"🐾 毛孩子今日状态: {report['health_status']}"
     content = "\n".join(report.get("suggestions", []))
-
-    url = f"https://sctapi.ftqq.com/{SERVERCHAN_KEY}.send"
-    payload = {"title": title, "desp": content}
-
+    url = f"https://sctapi.ftqq.com/{sckey}.send"
     try:
-        resp = requests.post(url, data=payload, timeout=10)
+        resp = requests.post(url, data={"title": title, "desp": content}, timeout=10)
         result = resp.json()
         logger.info(f"✅ Server酱推送成功: {result}")
         return {"status": "sent", "channel": "serverchan", "result": result}
@@ -88,23 +85,16 @@ def _send_serverchan(report: Dict) -> Dict:
 
 def send_alert(animal: str, behavior: str, interpretation: str) -> Dict:
     """发送实时警报 (宠物有紧急需求)"""
-    text = (
-        f"🚨 **毛孩子翻译官警报**\n"
-        f"检测到 {animal} 发出 **{behavior}**\n"
-        f"📋 {interpretation}\n"
-        f"请尽快查看摄像头确认情况！"
-    )
-
-    if WECHAT_WEBHOOK and "qyapi.weixin.qq.com" in WECHAT_WEBHOOK:
+    webhook = _get_wechat_webhook()
+    if webhook and "qyapi.weixin.qq.com" in webhook:
         payload = {
             "msgtype": "text",
             "text": {"content": f"🚨 毛孩子警报\n{animal} {behavior}\n{interpretation}"},
         }
         try:
-            resp = requests.post(WECHAT_WEBHOOK, json=payload, timeout=10)
+            resp = requests.post(webhook, json=payload, timeout=10)
             return {"status": "sent", "channel": "wecom"}
         except Exception as e:
             return {"status": "error", "error": str(e)}
-
-    logger.warning(f"⚠️ 警报未发送 (未配置): {text}")
+    logger.warning(f"⚠️ 警报未发送 (未配置 WECHAT_WEBHOOK)")
     return {"status": "skipped"}

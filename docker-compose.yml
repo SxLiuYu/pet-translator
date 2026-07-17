@@ -1,0 +1,14 @@
+﻿version: "3.9"
+
+services:
+  pet-translator:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./server/storage:/app/server/storage
+      - ./evidence:/app/evidence
+      - ./.env:/app/.env:ro
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped

@@ -1,0 +1,167 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🐾 毛孩子翻译官 - 管理面板</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="manifest" href="/app/manifest.json">
+<meta name="theme-color" content="#6c5ce7">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+</head>
+<body>
+<div id="app">
+  <nav class="sidebar">
+    <div class="logo">🐾 毛孩子翻译官</div>
+    <ul class="nav-list">
+      <li class="nav-item active" data-page="dashboard">📊 仪表盘</li>
+      <li class="nav-item" data-page="pets">🐕 宠物管理</li>
+      <li class="nav-item" data-page="events">📋 事件记录</li>
+      <li class="nav-item" data-page="report">📝 每日报告</li>
+      <li class="nav-item" data-page="cameras">📷 摄像头</li>
+      <li class="nav-item" data-page="upload">🎤 录音/上传</li>
+      <li class="nav-item" data-page="trends">📈 趋势</li>
+      <li class="nav-item" data-page="settings">⚙️ 设置</li>
+    </ul>
+    <div class="sidebar-footer">
+      <span id="ws-status" class="status-dot offline"></span>
+      <span id="ws-status-text">未连接</span>
+    </div>
+  </nav>
+  <main class="main-content">
+    <header class="page-header">
+      <h1 id="page-title">📊 仪表盘</h1>
+      <div class="header-actions">
+        <button id="btn-refresh" class="btn btn-sm">🔄 刷新</button>
+      </div>
+    </header>
+
+    <!-- Dashboard -->
+        <!-- Login Page -->
+    <section id="page-login" class="page">
+      <div class="card" style="max-width:420px;margin:60px auto">
+        <div class="card-header" style="justify-content:center;font-size:20px">🐾 毛孩子翻译官</div>
+        <div class="card-body">
+          <div id="login-form">
+            <div class="form-group"><label>用户名或邮箱</label><input type="text" id="login-username" placeholder="请输入用户名或邮箱"></div>
+            <div class="form-group"><label>密码</label><input type="password" id="login-password" placeholder="请输入密码"></div>
+            <button class="btn btn-primary" style="width:100%;justify-content:center" onclick="login()">登录</button>
+            <p style="text-align:center;margin-top:12px;font-size:13px;color:#636e72">还没有账号？<a href="#" onclick="showRegister()" style="color:#6c5ce7">注册</a></p>
+            <p id="login-error" style="text-align:center;margin-top:8px;font-size:13px;color:#e17055"></p>
+          </div>
+          <div id="register-form" style="display:none">
+            <div class="form-group"><label>用户名</label><input type="text" id="reg-username" placeholder="2-50个字符"></div>
+            <div class="form-group"><label>邮箱</label><input type="email" id="reg-email" placeholder="your@email.com"></div>
+            <div class="form-group"><label>密码</label><input type="password" id="reg-password" placeholder="至少6个字符"></div>
+            <div class="form-group"><label>显示名称（可选）</label><input type="text" id="reg-displayname" placeholder="你的昵称"></div>
+            <button class="btn btn-primary" style="width:100%;justify-content:center" onclick="register()">注册</button>
+            <p style="text-align:center;margin-top:12px;font-size:13px;color:#636e72">已有账号？<a href="#" onclick="showLogin()" style="color:#6c5ce7">登录</a></p>
+            <p id="register-error" style="text-align:center;margin-top:8px;font-size:13px;color:#e17055"></p>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section id="page-dashboard" class="page active">
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-icon">🐾</div><div class="stat-info"><div class="stat-value" id="stat-events">0</div><div class="stat-label">今日事件</div></div></div>
+        <div class="stat-card"><div class="stat-icon">🚨</div><div class="stat-info"><div class="stat-value" id="stat-alerts">0</div><div class="stat-label">警报</div></div></div>
+        <div class="stat-card"><div class="stat-icon">❤️</div><div class="stat-info"><div class="stat-value" id="stat-health">--</div><div class="stat-label">健康评分</div></div></div>
+        <div class="stat-card"><div class="stat-icon">📷</div><div class="stat-info"><div class="stat-value" id="stat-cameras">0</div><div class="stat-label">摄像头</div></div></div>
+      </div>
+      <div class="card"><div class="card-header">实时行为事件</div><div class="card-body" id="realtime-events"><div class="empty-state">等待事件推送...</div></div></div>
+      <div class="card"><div class="card-header">今日建议</div><div class="card-body" id="dashboard-suggestions"><div class="empty-state">暂无数据</div></div></div>
+    </section>
+
+    <!-- Pets -->
+    <section id="page-pets" class="page">
+      <div class="card"><div class="card-header">宠物列表<button class="btn btn-sm btn-primary" id="btn-add-pet">+ 添加宠物</button></div>
+      <div class="card-body"><table class="table" id="pet-table"><thead><tr><th>ID</th><th>名称</th><th>种类</th><th>品种</th><th>年龄</th><th>操作</th></tr></thead><tbody id="pet-table-body"><tr><td colspan="6" class="empty-state">暂无宠物</td></tr></tbody></table></div></div>
+    </section>
+
+    <!-- Events -->
+    <section id="page-events" class="page">
+      <div class="card"><div class="card-header">事件记录<div class="filter-group"><select id="event-pet-filter"><option value="">全部宠物</option></select><button class="btn btn-sm" onclick="exportEvents()">📥 导出</button></div></div>
+      <div class="card-body" id="events-list"><div class="empty-state">暂无事件记录</div></div></div>
+    </section>
+
+    <!-- Report -->
+    <section id="page-report" class="page">
+      <div class="card"><div class="card-header">每日精神状态报告</div>
+      <div class="card-body" id="report-content"><div class="empty-state">暂无数据</div><button class="btn btn-primary" id="btn-generate-report">📊 生成今日报告</button></div></div>
+    </section>
+
+    <!-- Cameras + Live View -->
+    <section id="page-cameras" class="page">
+      <div class="card"><div class="card-header">摄像头管理</div>
+      <div class="card-body">
+        <form id="camera-form" class="form-inline">
+          <input type="text" id="cam-name" placeholder="摄像头名称" required>
+          <select id="cam-type" required><option value="rtsp">RTSP 网络摄像头</option><option value="usb">USB 摄像头</option><option value="esp32cam">ESP32-CAM</option></select>
+          <input type="text" id="cam-url" placeholder="RTSP URL 或 IP 地址">
+          <button type="submit" class="btn btn-primary">添加</button>
+        </form>
+        <div id="camera-status" class="mt-2"><div class="empty-state">暂无摄像头</div></div>
+        <div id="camera-viewer" class="mt-2" style="min-height:60px"></div>
+      </div></div>
+    </section>
+
+    <!-- Upload + Browser Recording -->
+    <section id="page-upload" class="page">
+      <div class="card"><div class="card-header">🎤 浏览器录音</div>
+      <div class="card-body">
+        <button class="btn btn-primary" id="btn-start-record" onclick="startRecording()">🔴 开始录音</button>
+        <button class="btn btn-danger" id="btn-stop-record" style="display:none" onclick="stopRecording()">⏹️ 停止录音</button>
+        <span id="record-status" style="margin-left:12px;font-size:13px;color:#636e72"></span>
+      </div></div>
+      <div class="card"><div class="card-header">📁 上传音频文件</div>
+      <div class="card-body">
+        <form id="upload-form" class="form-inline"><input type="file" id="audio-file" accept="audio/*,.wav,.mp3" class="form-input"><button type="submit" class="btn btn-primary">🎤 上传分析</button></form>
+        <div id="upload-result" class="mt-2"></div>
+      </div></div>
+    </section>
+
+    <!-- Trends -->
+    <section id="page-trends" class="page">
+      <div class="card"><div class="card-header">历史趋势</div>
+      <div class="card-body" id="trends-content"><div class="empty-state">加载中...</div></div></div>
+    </section>
+
+    <!-- Settings -->
+    <section id="page-settings" class="page">
+      <div class="card"><div class="card-header">推送设置</div>
+      <div class="card-body">
+        <form id="settings-form">
+          <div class="form-group"><label>企业微信 Webhook URL</label><input type="url" id="settings-wechat-webhook" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."></div>
+          <div class="form-group"><label>Server酱 SCKEY</label><input type="text" id="settings-serverchan" placeholder="请输入 Server酱 SendKey"></div>
+          <div class="form-group"><label>YOLO 模型</label><select id="settings-yolo-model"><option value="yolov8n.pt">yolov8n.pt (最快)</option><option value="yolov8s.pt">yolov8s.pt</option><option value="yolov8m.pt">yolov8m.pt</option></select></div>
+          <button type="submit" class="btn btn-primary">💾 保存设置</button>
+          <span id="settings-status" style="margin-left:12px;font-size:13px;color:#00b894"></span>
+        </form>
+      </div></div>
+    </section>
+  </main>
+</div>
+
+<!-- Pet Modal -->
+<div class="modal" id="pet-modal">
+  <div class="modal-content">
+    <div class="modal-header"><span id="pet-modal-title">添加宠物</span><span class="modal-close">&times;</span></div>
+    <form id="pet-form">
+      <input type="hidden" id="pet-id">
+      <div class="form-group"><label>名称</label><input type="text" id="pet-name" required></div>
+      <div class="form-group"><label>种类</label><select id="pet-species"><option value="狗">狗</option><option value="猫">猫</option></select></div>
+      <div class="form-group"><label>品种</label><input type="text" id="pet-breed"></div>
+      <div class="form-group"><label>年龄</label><input type="number" id="pet-age" min="0"></div>
+      <div class="form-group"><label>个性标签</label><input type="text" id="pet-tags" placeholder="逗号分隔"></div>
+      <div class="form-group"><label>健康备注</label><textarea id="pet-notes" rows="2"></textarea></div>
+      <button type="submit" class="btn btn-primary">保存</button>
+    </form>
+  </div>
+</div>
+<script src="js/app.js"></script>
+</body>
+</html>
+
+
+

@@ -9,8 +9,15 @@ from typing import Any, Optional
 
 from storage.schema import DailyReport, Event, Pet, now_iso
 
+
+def _safe_str(value, default=""):
+    return str(value) if value is not None else default
+
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STORAGE_DIR = os.path.join(BASE_DIR, "storage")
+
+_global_write_lock = threading.Lock()
 
 
 def _ensure_dir(path: str) -> None:
@@ -75,6 +82,13 @@ class PetRepository:
             payload["updated_at"] = payload["created_at"]
         with self._lock:
             records = self._repo.all()
+            existing_ids = {str(item.get("id")) for item in records}
+            if str(payload.get("id")) in existing_ids:
+                for index, item in enumerate(records):
+                    if str(item.get("id")) == str(payload.get("id")):
+                        records[index] = payload
+                        self._repo.save_all(records)
+                        return Pet.from_dict(payload)
             records.append(payload)
             self._repo.save_all(records)
         return Pet.from_dict(payload)
@@ -90,6 +104,23 @@ class PetRepository:
                     records[idx] = updated
                     self._repo.save_all(records)
                     return Pet.from_dict(updated)
+            target_name = _safe_str(data.get("name"))
+            target_species = _safe_str(data.get("species"))
+            merged = None
+            for item in records:
+                pet = Pet.from_dict(item)
+                if pet.id != pet_id and pet.name == target_name and pet.species == target_species:
+                    merged = item
+                    break
+            if merged is not None:
+                updated = deepcopy(merged)
+                updated.update({k: v for k, v in data.items() if k != "id"})
+                updated["id"] = pet_id
+                updated["updated_at"] = now_iso()
+                records = [item for item in records if str(item.get("id")) != str(merged.get("id"))]
+                records.append(updated)
+                self._repo.save_all(records)
+                return Pet.from_dict(updated)
         return None
 
     def delete(self, pet_id: str) -> bool:
@@ -114,10 +145,11 @@ class EventRepository:
             payload["created_at"] = now_iso()
         if not payload.get("timestamp"):
             payload["timestamp"] = payload["created_at"]
-        with self._lock:
-            records = self._repo.all()
-            records.append(payload)
-            self._repo.save_all(records)
+        with _global_write_lock:
+            with self._lock:
+                records = self._repo.all()
+                records.append(payload)
+                self._repo.save_all(records)
         return Event.from_dict(payload)
 
     def get_by_pet(self, pet_id: str, limit: int = 50, offset: int = 0) -> tuple[list[Event], int]:
@@ -170,9 +202,10 @@ class ReportRepository:
         _ensure_dir(report_dir)
         path = os.path.join(report_dir, f"{report.date or now_iso()[:10]}.json")
         payload = report.to_dict()
-        with self._lock:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
+        with _global_write_lock:
+            with self._lock:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
         return path
 
     def get_report(self, date: str, pet_id: str) -> Optional[DailyReport]:

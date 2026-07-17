@@ -1,0 +1,5 @@
+﻿# 认证相关依赖
+sqlalchemy>=2.0
+aiosqlite
+passlib[bcrypt]
+python-jose[cryptography]

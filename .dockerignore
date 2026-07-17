@@ -1,0 +1,12 @@
+﻿__pycache__
+*.pyc
+*.pyo
+.git
+.agnes
+.pytest_cache
+venv
+.env
+.gitignore
+README.md
+start.bat
+tests
