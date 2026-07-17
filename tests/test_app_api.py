@@ -1,0 +1,182 @@
+﻿from __future__ import annotations
+
+import os
+import sys
+from datetime import datetime
+from unittest.mock import MagicMock
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
+
+import server.app as app_module
+from storage import repository as repo
+from storage.repository import PetRepository, EventRepository
+from storage.schema import Event, Pet
+
+
+class DummyClassifier:
+    def classify(self, audio_array, sample_rate=16000):
+        return {
+            "animal": "狗",
+            "behavior": "吠叫",
+            "confidence": 0.9,
+            "is_pet_sound": True,
+            "is_alert": True,
+            "raw_predictions": {"dog bark": 0.9},
+            "timestamp": datetime.now().isoformat(),
+        }
+
+
+class DummyEngine:
+    def analyze(self, event):
+        return {
+            "severity": "warning",
+            "interpretation": "持续吠叫",
+            "suggestion": "增加运动量",
+            "period": "work_hours",
+        }
+
+    def generate_daily_report(self):
+        return {
+            "date": "2026-07-16",
+            "pet_id": None,
+            "pet_name": None,
+            "summary": {"total_events": 0, "alert_count": 0},
+            "suggestions": ["保持现状"],
+            "hourly_chart": {},
+            "top_alerts": [],
+        }
+
+
+class DummyNotifier:
+    def send_pet_report(self, report):
+        return {"status": "skipped"}
+
+    def send_alert(self, *args, **kwargs):
+        return {"status": "skipped"}
+
+
+class DummyCameraManager:
+    def status(self):
+        return {}
+
+    def get(self, name):
+        return None
+
+    def get_frame(self, name):
+        return None
+
+    def register_rtsp(self, *args, **kwargs):
+        return MagicMock()
+
+    def register_usb(self, *args, **kwargs):
+        return MagicMock()
+
+    def register_esp32cam(self, *args, **kwargs):
+        return MagicMock()
+
+
+class DummyVision:
+    def __init__(self):
+        self.model = None
+
+
+@pytest.fixture()
+def app(monkeypatch, tmp_path):
+    repo.STORAGE_DIR = str(tmp_path / "storage")
+    monkeypatch.setattr(app_module, "classifier", DummyClassifier(), raising=False)
+    monkeypatch.setattr(app_module, "behavior_engine", DummyEngine(), raising=False)
+    monkeypatch.setattr(app_module, "pet_repo", PetRepository(), raising=False)
+    monkeypatch.setattr(app_module, "event_repo", EventRepository(), raising=False)
+    monkeypatch.setattr(app_module, "report_repo", None, raising=False)
+    monkeypatch.setattr(app_module, "camera_manager", DummyCameraManager(), raising=False)
+    monkeypatch.setattr(app_module, "vision_detector", DummyVision(), raising=False)
+    return app_module.app
+
+
+def build_client(app):
+    from starlette.testclient import TestClient
+
+    client = TestClient(app)
+    return client
+
+
+def test_list_pets(app):
+    client = build_client(app)
+    response = client.post("/api/pets", json={"pet_id": "pet_1", "name": "旺财", "species": "狗"})
+    assert response.status_code == 200
+    assert response.json()["pet"]["name"] == "旺财"
+
+    response = client.get("/api/pets")
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+
+
+def test_create_pet_conflict(app):
+    client = build_client(app)
+    client.post("/api/pets", json={"pet_id": "pet_1", "name": "旺财", "species": "狗"})
+    response = client.post("/api/pets", json={"pet_id": "pet_1", "name": "旺财2", "species": "狗"})
+    assert response.status_code == 409
+
+
+def test_get_update_delete_pet(app):
+    client = build_client(app)
+    client.post("/api/pets", json={"pet_id": "pet_1", "name": "旺财", "species": "狗"})
+
+    response = client.get("/api/pets/pet_1")
+    assert response.status_code == 200
+    assert response.json()["pet"]["species"] == "狗"
+
+    response = client.put("/api/pets/pet_1", json={"name": "旺财2"})
+    assert response.status_code == 200
+    assert response.json()["pet"]["name"] == "旺财2"
+
+    response = client.delete("/api/pets/pet_1")
+    assert response.status_code == 200
+    assert response.json()["status"] == "deleted"
+
+    response = client.get("/api/pets/pet_1")
+    assert response.status_code == 404
+
+
+def test_events_filter_by_pet_and_feedback(app):
+    client = build_client(app)
+    client.post("/api/pets", json={"pet_id": "pet_1", "name": "旺财", "species": "狗"})
+    client.post("/api/pets", json={"pet_id": "pet_2", "name": "咪咪", "species": "猫"})
+
+    event_repo = app_module.event_repo
+    event_repo.add(Event(id="e1", pet_id="pet_1", behavior="吠叫", confidence=0.9))
+    event_repo.add(Event(id="e2", pet_id="pet_2", behavior="喵叫", confidence=0.8))
+    event_repo.add(Event(id="e3", pet_id="pet_1", behavior="喘气", confidence=0.7))
+
+    response = client.get("/api/events", params={"pet_id": "pet_1"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["pet_id"] == "pet_1"
+    assert len(body["events"]) == 2
+    assert {event["id"] for event in body["events"]} == {"e1", "e3"}
+
+    response = client.post("/api/event/e2/feedback", json={"feedback": "false_positive"})
+    assert response.status_code == 200
+    assert response.json()["feedback"] == "false_positive"
+
+
+def test_upload_audio_persists_event_and_evidence(app, tmp_path, monkeypatch):
+    wav_path = tmp_path / "pet.wav"
+    wav_path.write_bytes(b"RIFF" + b"\x00" * 100)
+
+    monkeypatch.setattr(app_module, "_load_audio", lambda path: ([0.0] * 1600, 16000), raising=False)
+    monkeypatch.setenv("PET_ID", "pet_1")
+    client = build_client(app)
+    client.post("/api/pets", json={"pet_id": "pet_1", "name": "旺财", "species": "狗"})
+
+    with open(wav_path, "rb") as f:
+        response = client.post("/api/upload_audio", files={"file": ("pet.wav", f, "audio/wav")})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["event_id"]
+    assert body["animal"] == "狗"
+    assert body["evidence"].get("audio")
+    assert body["evidence"]["audio"].startswith(str(app_module.Path(__file__).resolve().parent.parent / "evidence" / "audio"))

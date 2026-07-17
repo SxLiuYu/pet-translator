@@ -1,0 +1,13 @@
+{
+  "date": "2026-07-16",
+  "pet_id": "pet_001",
+  "pet_name": "旺财",
+  "health_score": 0,
+  "health_status": "",
+  "total_events": 5,
+  "alert_count": 1,
+  "event_breakdown": {},
+  "hourly_chart": {},
+  "top_alerts": [],
+  "suggestions": []
+}

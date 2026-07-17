@@ -1,0 +1,10 @@
+[
+  "tests/test_app_api.py::test_create_pet_conflict",
+  "tests/test_app_api.py::test_events_filter_by_pet_and_feedback",
+  "tests/test_app_api.py::test_get_update_delete_pet",
+  "tests/test_app_api.py::test_list_pets",
+  "tests/test_app_api.py::test_upload_audio_persists_event_and_evidence",
+  "tests/test_storage.py::test_event_pet_filter_and_feedback",
+  "tests/test_storage.py::test_pet_crud",
+  "tests/test_storage.py::test_report_persistence"
+]

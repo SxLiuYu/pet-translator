@@ -1,0 +1,24 @@
+name: pet_translator
+description: 🐾 毛孩子翻译官 - 宠物行为分析 + 声纹识别 + 精神状态报告
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  web_socket_channel: ^2.4.0
+  http: ^1.1.0
+  cupertino_icons: ^1.0.6
+  flutter_markdown: ^0.6.18
+  provider: ^6.1.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

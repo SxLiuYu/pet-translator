@@ -1,0 +1,34 @@
+﻿# ============================================
+# 毛孩子翻译官 - 服务端依赖
+# ============================================
+
+# Web 框架
+fastapi==0.95.2
+uvicorn[standard]==0.27.1
+python-multipart==0.0.15
+
+# 音频处理
+librosa==0.10.1
+soundfile==0.12.1
+numpy==1.24.4
+scipy==1.11.4
+
+# 机器学习 (YAMNet 声纹分类)
+tensorflow==2.15.0
+# 或轻量级替代: tf-lite-runtime==2.15.0
+
+# 视觉行为检测 (YOLOv8)
+ultralytics==8.0.200
+
+# 图像处理
+opencv-python==4.8.1.78
+Pillow==10.1.0
+
+# 工具
+python-dotenv==1.0.1
+pydantic==2.5.3
+requests==2.31.0
+
+# 开发
+pytest==7.4.4
+httpx==0.27.0
