@@ -85,5 +85,5 @@
 - [x] Reduce the Docker build context without excluding production source or model assets.
 - [x] Add an independent CI job that builds the production image and starts the real container command.
 - [x] Poll `/health`, validate its response contract, expose failure logs, and clean up the container.
-- [ ] Push the workflow and confirm the Docker build and container smoke test pass on GitHub Actions.
-- [ ] Record the final workflow run, commit SHAs, commands, and evidence in the acceptance report.
+- [x] Push the workflow and confirm the Docker build and container smoke test pass on GitHub Actions.
+- [x] Record the successful workflow run, commit SHAs, commands, and evidence in the acceptance report.
