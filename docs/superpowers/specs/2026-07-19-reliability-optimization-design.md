@@ -73,7 +73,11 @@ naive UTC column representation.
 Add a lightweight test dependency file and a GitHub Actions workflow for Python 3.11.
 CI runs the complete unit/API suite, byte-compilation, and whitespace validation without
 downloading TensorFlow or model weights. Full ML dependencies remain in the production
-requirements file and Docker image.
+requirements file and Docker image. A separate container job builds that production image,
+starts it with the same command used for deployment, polls `/health` through the published
+port, validates the response contract, prints container logs on failure, and always removes
+the test container. Keeping the jobs separate preserves fast Python feedback while making
+the full delivery artifact a required, observable acceptance boundary.
 
 ## Error Handling
 
@@ -93,8 +97,8 @@ requirements file and Docker image.
 5. Event listing without `pet_id` is not implicitly filtered by `PET_ID`.
 6. Authentication imports without the Python `crypt` deprecation and uses no deprecated
    project-owned UTC calls.
-7. The full test suite, byte compilation, diff checks, application import smoke test, and
-   Docker build (when Docker is available) pass.
+7. The full test suite, byte compilation, diff checks, application import smoke test,
+   production Docker build, and container `/health` smoke test pass.
 8. Design, implementation, acceptance evidence, and remaining limitations are documented.
 
 ## Out of Scope

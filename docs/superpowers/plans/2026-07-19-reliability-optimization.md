@@ -71,3 +71,18 @@
 - [x] Review the complete diff for secrets, runtime artifacts, generated evidence, and unrelated files.
 - [x] Record commands, outputs, test counts, limitations, and the implementation commit in the acceptance report.
 - [x] Commit the scoped files, push `master`, and verify local HEAD equals `origin/master`.
+
+### Task 6: Close the Docker acceptance gap
+
+**Files:**
+- Modify: `.dockerignore`
+- Modify: `.github/workflows/ci.yml`
+- Modify: `docs/superpowers/specs/2026-07-19-reliability-optimization-design.md`
+- Modify: `docs/acceptance-report.md`
+
+- [x] Resolve production requirements as binary wheels for the Python 3.9 Linux x86_64 Docker target.
+- [x] Reduce the Docker build context without excluding production source or model assets.
+- [x] Add an independent CI job that builds the production image and starts the real container command.
+- [x] Poll `/health`, validate its response contract, expose failure logs, and clean up the container.
+- [ ] Push the workflow and confirm the Docker build and container smoke test pass on GitHub Actions.
+- [ ] Record the final workflow run, commit SHAs, commands, and evidence in the acceptance report.
