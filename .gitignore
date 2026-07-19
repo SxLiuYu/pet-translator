@@ -1,1 +1,14 @@
-﻿# python__pycache__`r`n*.pyc`r`n/node_modules`r`n/test-results/
+﻿# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Frontend
+node_modules/
+test-results/
+
+# Runtime data
+evidence/
+
+# Local metadata
+.DS_Store

@@ -9,6 +9,7 @@
 | 🎤 实时声纹监听 | ESP32-S3 + I2S 麦克风，检测狗叫/猫叫 |
 | 📷 多源摄像头接入 | RTSP网络摄像头 / USB摄像头 / ESP32-CAM |
 | 🧠 AI 行为分析 | YAMNet 声纹分类 + YOLOv8 视觉检测 + 行为规则引擎 |
+| 🔀 音视频融合 | 按宠物和时间窗口关联声纹、画面，输出联合行为结论 |
 | 🚨 实时警报推送 | 拆家 / 宠物呜咽 / 猫嘶嘶 → 微信即时通知 |
 | 📊 每日精神状态报告 | 健康评分 + 活跃时段 + 行为分布图 |
 | 💡 智能陪玩建议 | 根据今日行为给出针对性建议 |
@@ -27,6 +28,7 @@ FastAPI 后端 (:8000)
     ├── CameraManager     ← 多摄像头统一管理
     ├── BehaviorDetector  ← YOLOv8 视觉行为检测
     ├── AudioClassifier   ← YAMNet 声纹分类
+    ├── AudioVisualFusionEngine ← 按宠物隔离的有界音视频融合
     ├── BehaviorRulesEngine ← 声纹+视觉融合分析
     └── Notifier          ← 企业微信 / Server酱 推送
          │
@@ -81,6 +83,8 @@ WiFi 连接后通过 HTTP 获取画面
 
 ### 2. 后端部署
 
+后端支持 Python 3.9-3.11。
+
 ```bash
 cd server
 python -m venv venv
@@ -91,6 +95,8 @@ pip install -r requirements.txt
 python app.py
 # 访问 http://localhost:8000/docs 查看 API 文档
 ```
+
+默认使用 JSON 文件保存宠物、事件和报告；融合历史仅保存在当前进程内，服务重启后清空。未提供 `models/yamnet.tflite` 时，音频分类器会明确记录告警并使用降级分类模式。
 
 ### 3. 注册摄像头
 
@@ -161,10 +167,43 @@ flutter run
 | 端点 | 方法 | 功能 |
 |-------|------|------|
 | `POST /api/upload_audio` | 上传音频 → 声纹分类 + 行为分析 |
+| `GET /api/fusions?pet_id=xxx` | 获取指定宠物最近的音视频融合结论 |
 | `GET /api/report/daily` | 今日精神状态报告 |
 | `POST /api/report/generate` | 生成报告并推送到微信 |
 | `GET /api/events` | 历史行为事件 |
 | `WS /ws` | WebSocket 实时推送行为事件 |
+
+`POST /api/upload_audio` 和 `POST /api/camera/detect` 均支持 `pet_id` 查询参数。有效宠物声音和有意义的视觉行为会保存为事件；环境噪音、`unknown` 和 `no_pet_detected` 不会写入事件或融合历史。`GET /api/events` 不传 `pet_id` 时返回所有宠物的事件，集合接口的 `limit` 范围为 `1..100`。
+
+### 认证端点
+
+| 端点 | 方法 | 功能 |
+|------|------|------|
+| `POST /api/auth/register` | 注册并返回 JWT |
+| `POST /api/auth/login` | 登录并返回 JWT |
+| `GET /api/auth/me` | 获取当前用户信息 |
+| `POST /api/auth/change-password` | 修改当前用户密码 |
+
+## 🧪 测试与持续集成
+
+离线测试依赖不包含 TensorFlow、YOLO 或模型权重，可在 Python 3.11 环境快速执行：
+
+```bash
+python -m pip install -r server/requirements-test.txt
+python -m pytest tests/ -q -W error::DeprecationWarning
+python -m compileall -q server tests
+git diff --check
+```
+
+GitHub Actions 在每次 push 和 pull request 上执行同一组检查。完整验收记录见 [`docs/acceptance-report.md`](docs/acceptance-report.md)。
+
+## ⚠️ 当前边界
+
+- 音视频融合是单进程内存状态，不跨重启持久化。
+- 摄像头行为检测仍由 API 手动触发，没有持续分析 worker。
+- JSON 存储不提供事务数据库语义，用户认证尚未隔离 Pet/Event/Report 数据。
+- CORS 当前全开，生产部署仍需 HTTPS、限流、安全头和强制配置 JWT 密钥。
+- 本次离线验收未覆盖真实 YAMNet/YOLO 准确率、物理摄像头或真实音频数据集。
 
 ## 📷 摄像头配置参考
 

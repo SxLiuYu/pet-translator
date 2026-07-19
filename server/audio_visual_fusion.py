@@ -1,26 +1,19 @@
-"""
-audio_visual_fusion.py
-??+?????????
-?????????????????????????
-"""
+"""Time-windowed fusion for audio and visual pet behavior results."""
 from __future__ import annotations
 
-import logging
-import time
+import threading
 from collections import defaultdict
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Optional, Dict, List
-
-logger = logging.getLogger("pet_translator.fusion")
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
+from typing import Callable, Dict, List, Optional
 
 
 @dataclass
 class FusionResult:
-    """??????"""
+    pet_id: str
     behavior: str
     confidence: float
-    sources: List[str] = field(default_factory=list)  # ["audio", "visual"]
+    sources: List[str] = field(default_factory=list)
     audio_behavior: str = ""
     visual_behavior: str = ""
     audio_confidence: float = 0.0
@@ -32,9 +25,10 @@ class FusionResult:
 
     def to_dict(self) -> dict:
         return {
+            "pet_id": self.pet_id,
             "behavior": self.behavior,
             "confidence": self.confidence,
-            "sources": self.sources,
+            "sources": list(self.sources),
             "audio_behavior": self.audio_behavior,
             "visual_behavior": self.visual_behavior,
             "audio_confidence": self.audio_confidence,
@@ -47,212 +41,207 @@ class FusionResult:
 
 
 class AudioVisualFusionEngine:
-    """
-    ??-??????
-    
-    ????:
-    1. ??????: ????? 5 ??????+????????
-    2. ?????: ??????????????????
-    3. ????: ???????????, ??? "????"
-    4. ????: ????? alert ?????? alert
-    """
-    
-    # ????????? (???)
-    BEHAVIOR_SIMILARITY = {
-        ("?", "??"): {"?": ["??", "??"], "?": []},
-        ("?", "??"): {"?": ["??", "??"], "?": []},
-        ("?", "??"): {"?": ["??", "??"], "?": []},
-        ("?", "??"): {"?": [], "?": ["??", "??"]},
-        ("?", "??"): {"?": [], "?": ["??", "??"]},
-        ("?", "??"): {"?": [], "?": ["??", "??"]},
-    }
-    
-    # ??????
-    INTERPRETATION_TEMPLATES = {
-        "both_match": "??????{behavior}??????{behavior}?????{animal}??{behavior}",
-        "audio_only": "???{animal}??{behavior}?????????",
-        "visual_only": "??????{animal}??{behavior}?????????",
-        "conflict": "????{audio_behavior}?????{visual_behavior}???????????",
-        "mixed": "{animal}?????{audio_behavior}?{visual_behavior}??",
-    }
-    
-    def __init__(self, time_window_seconds: int = 300):
-        """
-        Args:
-            time_window_seconds: ????????? 5 ???
-        """
+    """Fuse the latest audio and visual observations for each pet."""
+
+    def __init__(
+        self,
+        time_window_seconds: int = 300,
+        history_limit: int = 100,
+        clock: Optional[Callable[[], datetime]] = None,
+    ):
+        if time_window_seconds <= 0:
+            raise ValueError("time_window_seconds must be greater than zero")
         self.time_window = timedelta(seconds=time_window_seconds)
+        self.history_limit = max(1, history_limit)
         self._audio_buffer: Dict[str, List[dict]] = defaultdict(list)
         self._visual_buffer: Dict[str, List[dict]] = defaultdict(list)
-        self._results: List[FusionResult] = []
-    
-    def add_audio_result(self, pet_id: str, result: dict):
-        """????????????"""
-        entry = {
-            "source": "audio",
-            "pet_id": pet_id,
-            "timestamp": datetime.now().isoformat(),
-            **result,
-        }
-        self._audio_buffer[pet_id].append(entry)
-        self._cleanup_buffers(pet_id)
-    
-    def add_visual_result(self, pet_id: str, result: dict):
-        """????????????"""
-        entry = {
-            "source": "visual",
-            "pet_id": pet_id,
-            "timestamp": datetime.now().isoformat(),
-            **result,
-        }
-        self._visual_buffer[pet_id].append(entry)
-        self._cleanup_buffers(pet_id)
-    
+        self._results: Dict[str, List[FusionResult]] = defaultdict(list)
+        self._lock = threading.RLock()
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+
+    def add_audio_result(self, pet_id: str, result: dict) -> FusionResult:
+        return self._add_result(pet_id, result, "audio")
+
+    def add_visual_result(self, pet_id: str, result: dict) -> FusionResult:
+        return self._add_result(pet_id, result, "visual")
+
+    def _add_result(self, pet_id: str, result: dict, source: str) -> FusionResult:
+        target_pet_id = str(pet_id or "default")
+        entry = dict(result)
+        entry.update({
+            "source": source,
+            "pet_id": target_pet_id,
+            "timestamp": self._normalize_timestamp(result.get("timestamp")),
+        })
+        with self._lock:
+            buffer = self._audio_buffer if source == "audio" else self._visual_buffer
+            buffer[target_pet_id].append(entry)
+            self._cleanup_buffers(target_pet_id)
+            if self._audio_buffer[target_pet_id] or self._visual_buffer[target_pet_id]:
+                fused = self._fuse_unlocked(target_pet_id)
+            else:
+                fused = self._single_source_result(entry, target_pet_id, source)
+            self._results[target_pet_id].append(fused)
+            self._results[target_pet_id] = self._results[target_pet_id][-self.history_limit :]
+            return self._copy_result(fused)
+
     def fuse(self, pet_id: str) -> Optional[FusionResult]:
-        """
-        ???????????
-        
-        ??: FusionResult ? None???????
-        """
-        audio_entries = self._audio_buffer.get(pet_id, [])
-        visual_entries = self._visual_buffer.get(pet_id, [])
-        
-        if not audio_entries and not visual_entries:
+        """Return the current fused state without adding a history entry."""
+        target_pet_id = str(pet_id or "default")
+        with self._lock:
+            self._cleanup_buffers(target_pet_id)
+            if not self._audio_buffer[target_pet_id] and not self._visual_buffer[target_pet_id]:
+                return None
+            return self._fuse_unlocked(target_pet_id)
+
+    def _fuse_unlocked(self, pet_id: str) -> FusionResult:
+        audio = self._latest(self._audio_buffer[pet_id])
+        visual = self._latest(self._visual_buffer[pet_id])
+
+        if audio and visual:
+            audio_time = self._parse_timestamp(audio["timestamp"])
+            visual_time = self._parse_timestamp(visual["timestamp"])
+            if abs(audio_time - visual_time) <= self.time_window:
+                return self._merge_results(audio, visual, pet_id)
+            if audio_time > visual_time:
+                return self._single_source_result(audio, pet_id, "audio")
+            return self._single_source_result(visual, pet_id, "visual")
+        if audio:
+            return self._single_source_result(audio, pet_id, "audio")
+        return self._single_source_result(visual, pet_id, "visual")
+
+    @staticmethod
+    def _latest(entries: List[dict]) -> Optional[dict]:
+        if not entries:
             return None
-        
-        # ??????????
-        best_audio = self._find_matching(audio_entries, visual_entries) if audio_entries and visual_entries else None
-        best_visual = self._find_matching(visual_entries, audio_entries) if audio_entries and visual_entries else None
-        
-        now = datetime.now()
-        
-        if best_audio and best_visual:
-            # ???????? ? ??
-            return self._merge_results(best_audio, best_visual, pet_id, now)
-        elif best_audio:
-            # ????
-            return self._single_source_result(best_audio, pet_id, now, "audio")
-        elif best_visual:
-            # ????
-            return self._single_source_result(best_visual, pet_id, now, "visual")
-        
-        return None
-    
-    def _find_matching(self, primary: List[dict], secondary: List[dict]) -> Optional[dict]:
-        """? secondary ???? primary ?????????"""
-        if not secondary:
-            return None
-        primary_ts = datetime.fromisoformat(primary[-1]["timestamp"])
-        for entry in reversed(secondary):
-            entry_ts = datetime.fromisoformat(entry["timestamp"])
-            if abs(primary_ts - entry_ts) <= self.time_window:
-                return entry
-        return None
-    
-    def _merge_results(self, audio: dict, visual: dict, pet_id: str, now: datetime) -> FusionResult:
-        """?????????"""
-        audio_behavior = audio.get("behavior", "")
-        visual_behavior = visual.get("behavior", "")
-        audio_conf = audio.get("confidence", 0.0)
-        visual_conf = visual.get("confidence", 0.0)
-        animal = audio.get("animal", visual.get("animal", "??"))
-        
-        # ????????
-        if audio_conf >= visual_conf:
-            behavior = audio_behavior
-            confidence = audio_conf
-        else:
-            behavior = visual_behavior
-            confidence = visual_conf
-        
-        # ??????
+        return max(entries, key=lambda entry: AudioVisualFusionEngine._parse_timestamp(entry["timestamp"]))
+
+    def _merge_results(self, audio: dict, visual: dict, pet_id: str) -> FusionResult:
+        audio_behavior = str(audio.get("behavior") or "")
+        visual_behavior = str(visual.get("behavior") or "")
+        audio_confidence = self._confidence(audio)
+        visual_confidence = self._confidence(visual)
+        animal = str(audio.get("animal") or visual.get("animal") or "宠物")
+
         if audio_behavior == visual_behavior:
-            interpretation = self.INTERPRETATION_TEMPLATES["both_match"].format(
-                behavior=behavior, animal=animal
-            )
+            behavior = audio_behavior
+            interpretation = f"声音和画面均检测到{animal}{behavior}，判断可信度较高"
         elif audio_behavior and visual_behavior:
-            interpretation = self.INTERPRETATION_TEMPLATES["conflict"].format(
-                audio_behavior=audio_behavior, visual_behavior=visual_behavior
+            behavior = f"{audio_behavior} + {visual_behavior}"
+            interpretation = (
+                f"声音检测到{audio_behavior}，同期画面显示{visual_behavior}，"
+                "已合并为多模态行为记录"
             )
-            behavior = f"{audio_behavior}/{visual_behavior}"
         else:
-            behavior = audio_behavior or visual_behavior
-            interpretation = "??????????????"
-        
-        # ????
-        is_alert = audio.get("is_alert", False) or visual.get("is_destructive", False)
-        
-        suggestion = audio.get("suggestion", visual.get("description", "????"))
-        
+            behavior = audio_behavior or visual_behavior or "unknown"
+            interpretation = f"声音和画面共同提供了{animal}的行为线索"
+
+        # Visual context is slightly more reliable for physical behavior, while
+        # audio remains the primary source for vocal distress signals.
+        confidence = round(audio_confidence * 0.45 + visual_confidence * 0.55, 3)
+        suggestion = str(audio.get("suggestion") or visual.get("suggestion") or visual.get("description") or "继续观察")
+
         return FusionResult(
+            pet_id=pet_id,
             behavior=behavior,
             confidence=confidence,
             sources=["audio", "visual"],
             audio_behavior=audio_behavior,
             visual_behavior=visual_behavior,
-            audio_confidence=audio_conf,
-            visual_confidence=visual_conf,
+            audio_confidence=audio_confidence,
+            visual_confidence=visual_confidence,
             interpretation=interpretation,
             suggestion=suggestion,
-            is_alert=is_alert,
-            timestamp=now.isoformat(),
+            is_alert=bool(audio.get("is_alert") or visual.get("is_alert") or visual.get("is_destructive")),
+            timestamp=str(max(
+                (audio, visual),
+                key=lambda entry: self._parse_timestamp(entry["timestamp"]),
+            )["timestamp"]),
         )
-    
-    def _single_source_result(self, entry: dict, pet_id: str, now: datetime, source: str) -> FusionResult:
-        """??????"""
-        is_alert = entry.get("is_alert", False)
-        if source == "audio":
-            behavior = entry.get("behavior", "")
-            confidence = entry.get("confidence", 0.0)
-            animal = entry.get("animal", "??")
-            interpretation = self.INTERPRETATION_TEMPLATES["audio_only"].format(
-                behavior=behavior, animal=animal
-            )
-        else:
-            behavior = entry.get("behavior", "unknown")
-            confidence = entry.get("confidence", 0.0)
-            animal = entry.get("animal", "??")
-            interpretation = self.INTERPRETATION_TEMPLATES["visual_only"].format(
-                behavior=behavior, animal=animal
-            )
-        
+
+    def _single_source_result(self, entry: dict, pet_id: str, source: str) -> FusionResult:
+        behavior = str(entry.get("behavior") or "unknown")
+        confidence = self._confidence(entry)
+        animal = str(entry.get("animal") or "宠物")
+        source_name = "声音" if source == "audio" else "画面"
         return FusionResult(
+            pet_id=pet_id,
             behavior=behavior,
             confidence=confidence,
             sources=[source],
-            audio_behavior=entry.get("behavior", "") if source == "audio" else "",
-            visual_behavior=entry.get("behavior", "") if source == "visual" else "",
+            audio_behavior=behavior if source == "audio" else "",
+            visual_behavior=behavior if source == "visual" else "",
             audio_confidence=confidence if source == "audio" else 0.0,
             visual_confidence=confidence if source == "visual" else 0.0,
-            interpretation=interpretation,
-            suggestion=entry.get("suggestion", entry.get("description", "????")),
-            is_alert=is_alert,
-            timestamp=now.isoformat(),
+            interpretation=f"{source_name}检测到{animal}{behavior}，等待另一数据源确认",
+            suggestion=str(entry.get("suggestion") or entry.get("description") or "继续观察"),
+            is_alert=bool(entry.get("is_alert") or entry.get("is_destructive")),
+            timestamp=str(entry["timestamp"]),
         )
-    
-    def _cleanup_buffers(self, pet_id: str):
-        """???????"""
-        now = datetime.now()
-        cutoff = now - self.time_window
-        
-        for buf in [self._audio_buffer, self._visual_buffer]:
-            if pet_id in buf:
-                buf[pet_id] = [
-                    e for e in buf[pet_id]
-                    if datetime.fromisoformat(e["timestamp"]) >= cutoff
-                ]
-    
+
+    def _cleanup_buffers(self, pet_id: str) -> None:
+        all_entries = self._audio_buffer[pet_id] + self._visual_buffer[pet_id]
+        if not all_entries:
+            return
+        latest_time = max(self._parse_timestamp(entry["timestamp"]) for entry in all_entries)
+        cutoff = max(latest_time, self._now()) - self.time_window
+        self._audio_buffer[pet_id] = [
+            entry for entry in self._audio_buffer[pet_id]
+            if self._parse_timestamp(entry["timestamp"]) >= cutoff
+        ]
+        self._visual_buffer[pet_id] = [
+            entry for entry in self._visual_buffer[pet_id]
+            if self._parse_timestamp(entry["timestamp"]) >= cutoff
+        ]
+
     def get_recent_fusions(self, pet_id: str, limit: int = 10) -> List[FusionResult]:
-        """?????????"""
-        return self._results[-limit:]
+        with self._lock:
+            if limit <= 0:
+                return []
+            return [
+                self._copy_result(result)
+                for result in self._results[str(pet_id or "default")][-limit:]
+            ]
+
+    @staticmethod
+    def _copy_result(result: FusionResult) -> FusionResult:
+        return replace(result, sources=list(result.sources))
+
+    @staticmethod
+    def _confidence(entry: dict) -> float:
+        try:
+            return min(1.0, max(0.0, float(entry.get("confidence") or 0.0)))
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _parse_timestamp(value: str) -> datetime:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+
+    def _now(self) -> datetime:
+        current = self._clock()
+        if current.tzinfo is not None:
+            current = current.astimezone(timezone.utc).replace(tzinfo=None)
+        return current
+
+    def _normalize_timestamp(self, value: object) -> str:
+        try:
+            return self._parse_timestamp(str(value)).isoformat() if value else self._now().isoformat()
+        except (TypeError, ValueError):
+            return self._now().isoformat()
 
 
-# ??
 _fusion_engine: Optional[AudioVisualFusionEngine] = None
+_fusion_engine_lock = threading.Lock()
 
 
 def get_fusion_engine() -> AudioVisualFusionEngine:
     global _fusion_engine
     if _fusion_engine is None:
-        _fusion_engine = AudioVisualFusionEngine()
+        with _fusion_engine_lock:
+            if _fusion_engine is None:
+                _fusion_engine = AudioVisualFusionEngine()
     return _fusion_engine
