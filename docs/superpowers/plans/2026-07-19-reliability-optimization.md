@@ -69,5 +69,5 @@
 - [x] Run byte compilation, application import/route smoke checks, and `git diff --check`.
 - [x] Build the Docker image and smoke-test `/health` when Docker is available; otherwise record the exact environmental blocker.
 - [x] Review the complete diff for secrets, runtime artifacts, generated evidence, and unrelated files.
-- [ ] Record commands, outputs, test counts, limitations, and final commit in the acceptance report.
-- [ ] Commit the scoped files, push `master`, and verify local HEAD equals `origin/master`.
+- [x] Record commands, outputs, test counts, limitations, and the implementation commit in the acceptance report.
+- [x] Commit the scoped files, push `master`, and verify local HEAD equals `origin/master`.

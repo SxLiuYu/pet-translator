@@ -101,6 +101,8 @@ Unable to find application named 'Docker'
 - `evidence/`、Python 缓存、测试缓存和 `.DS_Store` 已忽略，不纳入提交。
 - 已跟踪的 `server/auth/users.db` 属于历史仓库内容，本次未修改。
 - CI 固定 Python 3.11，并执行完整测试、字节编译和 `git diff --check`。
+- 实现提交：`6a3a8c740780f97ac5c90020745c835ca44cce15`（`feat: harden multimodal fusion and delivery`）。
+- 实现提交已推送至 `origin/master`，推送后本地 HEAD 与远端分支 SHA 一致。
 
 ## 6. 结论与限制
 
@@ -114,4 +116,4 @@ Unable to find application named 'Docker'
 - CORS 全开，尚无 HTTPS、限流、安全头和完整生产密钥管理。
 - 尚未验收真实模型准确率、物理摄像头、真实音频数据集和完整移动端设备流程。
 
-最终交付以 Git 历史中的本次可靠性优化提交和远端 `origin/master` 一致性核验为准。
+最终交付以 Git 历史中的可靠性优化实现提交、文档收尾提交和远端 `origin/master` 一致性核验为准。
