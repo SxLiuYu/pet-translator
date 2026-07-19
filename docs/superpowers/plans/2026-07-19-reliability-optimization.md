@@ -75,6 +75,7 @@
 ### Task 6: Close the Docker acceptance gap
 
 **Files:**
+- Modify: `Dockerfile`
 - Modify: `.dockerignore`
 - Modify: `.github/workflows/ci.yml`
 - Modify: `docs/superpowers/specs/2026-07-19-reliability-optimization-design.md`
