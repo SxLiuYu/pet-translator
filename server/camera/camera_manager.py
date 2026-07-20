@@ -49,6 +49,14 @@ class BaseCamera(ABC):
         self._lock = threading.Lock()
         self._fps = 0.0
 
+        # Continuous analysis attributes
+        self._analyzing = False
+        self._analysis_thread: Optional[threading.Thread] = None
+        self._analysis_interval = 1.0
+        self._frames_analyzed = 0
+        self._current_behavior: Optional[str] = None
+        self._analysis_lock = threading.Lock()
+
     @abstractmethod
     def _open(self) -> bool:
         """打开摄像头连接，返回是否成功"""
@@ -106,6 +114,70 @@ class BaseCamera(ABC):
                 self._fps = frame_count / (now - fps_start)
                 frame_count = 0
                 fps_start = now
+
+    # ========== Continuous Analysis Methods ==========
+
+    @abstractmethod
+    def _detect_behavior(self, frame: np.ndarray) -> Optional[str]:
+        pass
+
+    def start_analysis(self, interval: float = 1.0):
+        if self._analyzing:
+            logger.warning(f"[{self.name}] 分析已在运行")
+            return
+            
+        self._analysis_interval = max(0.1, interval)
+        self._analyzing = True
+        self._analysis_thread = threading.Thread(
+            target=self._analysis_loop, 
+            daemon=True,
+            name=f"{self.name}_analysis"
+        )
+        self._analysis_thread.start()
+        logger.info(f"分析已启动 [{self.name}] (间隔: {self._analysis_interval}s)")
+
+    def stop_analysis(self):
+        if not self._analyzing:
+            return
+            
+        self._analyzing = False
+        if self._analysis_thread:
+            self._analysis_thread.join(timeout=3)
+            self._analysis_thread = None
+        logger.info(f"分析已停止 [{self.name}]")
+
+    @property
+    def is_analyzing(self) -> bool:
+        return self._analyzing
+
+    @property
+    def frames_analyzed(self) -> int:
+        return self._frames_analyzed
+
+    def get_current_behavior(self) -> Optional[str]:
+        with self._analysis_lock:
+            return self._current_behavior
+
+    def _analysis_loop(self):
+        last_analysis_time = 0
+        
+        while self._analyzing:
+            current_time = time.time()
+            
+            if current_time - last_analysis_time >= self._analysis_interval:
+                frame = self.get_latest_frame()
+                if frame is not None:
+                    try:
+                        behavior = self._detect_behavior(frame.image)
+                        with self._analysis_lock:
+                            self._current_behavior = behavior
+                        self._frames_analyzed += 1
+                    except Exception as e:
+                        logger.debug(f"[{self.name}] 行为检测异常: {e}")
+                
+                last_analysis_time = current_time
+            else:
+                time.sleep(0.01)
 
 
 class RTSPCamera(BaseCamera):

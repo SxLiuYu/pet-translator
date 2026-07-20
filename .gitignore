@@ -1,1 +1,27 @@
-﻿# python__pycache__`r`n*.pyc`r`n/node_modules`r`n/test-results/
+﻿# Python
+__pycache__/
+*.py[cod]
+*.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# 环境
+.env
+.venv/
+venv/
+
+# 数据库
+*.db
+*.sqlite3
+
+# 临时文件
+*.tmp
+*.bak
+*.swp
+
+# Node.js
+/node_modules/
+/test-results/

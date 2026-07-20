@@ -1,12 +1,20 @@
-﻿from __future__ import annotations
+﻿"""
+server/storage/repository.py
+数据仓库 - 使用 SQLite/SQLAlchemy 实现所有 CRUD 操作
+保持原有接口不变
+"""
+from __future__ import annotations
 
 import json
 import os
-import threading
 from copy import deepcopy
 from datetime import datetime
 from typing import Any, Optional
 
+from storage.database import (
+    PetModel, EventModel, ReportModel,
+    SessionLocal, get_db_session, init_db
+)
 from storage.schema import DailyReport, Event, Pet, now_iso
 
 
@@ -14,65 +22,43 @@ def _safe_str(value, default=""):
     return str(value) if value is not None else default
 
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STORAGE_DIR = os.path.join(BASE_DIR, "storage")
-
-_global_write_lock = threading.Lock()
-
-
-def _ensure_dir(path: str) -> None:
-    os.makedirs(path, exist_ok=True)
-
-
-class JsonRepository:
-    def __init__(self, path: str):
-        self.path = path
-        self._lock = threading.Lock()
-
-    def _read(self) -> Any:
-        with open(self.path, "r", encoding="utf-8") as f:
-            return json.load(f)
-
-    def _write(self, data: Any) -> None:
-        tmp_path = self.path + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, self.path)
-
-    def _load_list(self) -> list[dict]:
-        if not os.path.exists(self.path):
-            return []
-        try:
-            data = self._read()
-            if isinstance(data, list):
-                return data
-        except Exception:
-            pass
-        return []
-
-    def all(self) -> list[dict]:
-        with self._lock:
-            return self._load_list()
-
-    def save_all(self, records: list[dict]) -> None:
-        with self._lock:
-            self._write(records if isinstance(records, list) else [])
-
-
 class PetRepository:
+    """宠物仓库 - SQLite 实现"""
+
     def __init__(self):
-        _ensure_dir(STORAGE_DIR)
-        self._repo = JsonRepository(os.path.join(STORAGE_DIR, "pets.json"))
-        self._lock = threading.Lock()
+        init_db()
+
+    def _to_pet(self, model: PetModel) -> Pet:
+        return Pet(
+            id=model.id,
+            name=model.name,
+            species=model.species,
+            breed=model.breed,
+            age=model.age,
+            avatar_url=model.avatar_url,
+            personality_tags=model.personality_tags or [],
+            health_notes=model.health_notes,
+            quiet_hours=model.quiet_hours or [],
+            owner_id=model.owner_id,
+            created_at=model.created_at,
+            updated_at=model.updated_at,
+        )
 
     def get_all(self) -> list[Pet]:
-        return [Pet.from_dict(item) for item in self._repo.all()]
+        db = SessionLocal()
+        try:
+            pets = db.query(PetModel).all()
+            return [self._to_pet(p) for p in pets]
+        finally:
+            db.close()
 
     def get_by_id(self, pet_id: str) -> Optional[Pet]:
-        for item in self._repo.all():
-            if str(item.get("id")) == str(pet_id):
-                return Pet.from_dict(item)
-        return None
+        db = SessionLocal()
+        try:
+            pet = db.query(PetModel).filter(PetModel.id == str(pet_id)).first()
+            return self._to_pet(pet) if pet else None
+        finally:
+            db.close()
 
     def create(self, pet: Pet) -> Pet:
         payload = pet.to_dict()
@@ -80,64 +66,80 @@ class PetRepository:
             payload["created_at"] = now_iso()
         if not payload.get("updated_at"):
             payload["updated_at"] = payload["created_at"]
-        with self._lock:
-            records = self._repo.all()
-            existing_ids = {str(item.get("id")) for item in records}
-            if str(payload.get("id")) in existing_ids:
-                for index, item in enumerate(records):
-                    if str(item.get("id")) == str(payload.get("id")):
-                        records[index] = payload
-                        self._repo.save_all(records)
-                        return Pet.from_dict(payload)
-            records.append(payload)
-            self._repo.save_all(records)
+
+        with get_db_session() as db:
+            existing = db.query(PetModel).filter(PetModel.id == str(payload.get("id"))).first()
+            if existing:
+                for key, value in payload.items():
+                    if key != "id":
+                        setattr(existing, key, value)
+                existing.updated_at = now_iso()
+            else:
+                db.add(PetModel(**{k: v for k, v in payload.items() if k in [
+                    "id", "name", "species", "breed", "age", "avatar_url",
+                    "personality_tags", "health_notes", "quiet_hours",
+                    "owner_id", "created_at", "updated_at"
+                ]}))
         return Pet.from_dict(payload)
 
     def update(self, pet_id: str, data: dict) -> Optional[Pet]:
-        with self._lock:
-            records = self._repo.all()
-            for idx, item in enumerate(records):
-                if str(item.get("id")) == str(pet_id):
-                    updated = deepcopy(item)
-                    updated.update({k: v for k, v in data.items() if k != "id"})
-                    updated["updated_at"] = now_iso()
-                    records[idx] = updated
-                    self._repo.save_all(records)
-                    return Pet.from_dict(updated)
+        with get_db_session() as db:
+            pet = db.query(PetModel).filter(PetModel.id == str(pet_id)).first()
+            if pet:
+                for key, value in data.items():
+                    if key != "id" and hasattr(pet, key):
+                        setattr(pet, key, value)
+                pet.updated_at = now_iso()
+                return self._to_pet(pet)
+
+            # 尝试按名称和物种匹配
             target_name = _safe_str(data.get("name"))
             target_species = _safe_str(data.get("species"))
-            merged = None
-            for item in records:
-                pet = Pet.from_dict(item)
-                if pet.id != pet_id and pet.name == target_name and pet.species == target_species:
-                    merged = item
-                    break
-            if merged is not None:
-                updated = deepcopy(merged)
-                updated.update({k: v for k, v in data.items() if k != "id"})
-                updated["id"] = pet_id
-                updated["updated_at"] = now_iso()
-                records = [item for item in records if str(item.get("id")) != str(merged.get("id"))]
-                records.append(updated)
-                self._repo.save_all(records)
-                return Pet.from_dict(updated)
+            for existing in db.query(PetModel).all():
+                e = self._to_pet(existing)
+                if e.id != pet_id and e.name == target_name and e.species == target_species:
+                    for key, value in data.items():
+                        if key != "id" and hasattr(existing, key):
+                            setattr(existing, key, value)
+                    existing.id = pet_id
+                    existing.updated_at = now_iso()
+                    return self._to_pet(existing)
         return None
 
     def delete(self, pet_id: str) -> bool:
-        with self._lock:
-            records = self._repo.all()
-            filtered = [item for item in records if str(item.get("id")) != str(pet_id)]
-            if len(filtered) == len(records):
-                return False
-            self._repo.save_all(filtered)
-            return True
+        with get_db_session() as db:
+            pet = db.query(PetModel).filter(PetModel.id == str(pet_id)).first()
+            if pet:
+                db.delete(pet)
+                return True
+        return False
 
 
 class EventRepository:
+    """事件仓库 - SQLite 实现"""
+
     def __init__(self):
-        _ensure_dir(STORAGE_DIR)
-        self._repo = JsonRepository(os.path.join(STORAGE_DIR, "events.json"))
-        self._lock = threading.Lock()
+        init_db()
+
+    def _to_event(self, model: EventModel) -> Event:
+        return Event(
+            id=model.id,
+            pet_id=model.pet_id,
+            timestamp=model.timestamp,
+            source_type=model.source_type,
+            source_ref=model.source_ref,
+            animal=model.animal,
+            behavior=model.behavior,
+            confidence=model.confidence,
+            is_alert=model.is_alert,
+            severity=model.severity,
+            period=model.period,
+            interpretation=model.interpretation,
+            suggestion=model.suggestion,
+            evidence_paths=model.evidence_paths or {},
+            feedback=model.feedback,
+            created_at=model.created_at,
+        )
 
     def add(self, event: Event) -> Event:
         payload = event.to_dict()
@@ -145,79 +147,104 @@ class EventRepository:
             payload["created_at"] = now_iso()
         if not payload.get("timestamp"):
             payload["timestamp"] = payload["created_at"]
-        with _global_write_lock:
-            with self._lock:
-                records = self._repo.all()
-                records.append(payload)
-                self._repo.save_all(records)
+
+        with get_db_session() as db:
+            existing = db.query(EventModel).filter(EventModel.id == str(payload.get("id"))).first()
+            if existing:
+                for key, value in payload.items():
+                    if hasattr(existing, key) and key != "id":
+                        setattr(existing, key, value)
+            else:
+                db.add(EventModel(**{k: v for k, v in payload.items() if k in [
+                    "id", "pet_id", "timestamp", "source_type", "source_ref",
+                    "animal", "behavior", "confidence", "is_alert", "severity",
+                    "period", "interpretation", "suggestion", "evidence_paths",
+                    "feedback", "created_at"
+                ]}))
         return Event.from_dict(payload)
 
     def get_by_pet(self, pet_id: str, limit: int = 50, offset: int = 0) -> tuple[list[Event], int]:
-        records = self._repo.all()
-        filtered = [
-            Event.from_dict(item)
-            for item in records
-            if str(item.get("pet_id")) == str(pet_id)
-        ]
-        filtered.sort(key=lambda x: x.timestamp or x.created_at or "", reverse=True)
-        total = len(filtered)
-        paged = filtered[offset : offset + limit]
-        return paged, total
+        db = SessionLocal()
+        try:
+            query = db.query(EventModel).filter(EventModel.pet_id == str(pet_id))
+            total = query.count()
+            events = query.order_by(EventModel.timestamp.desc()).offset(offset).limit(limit).all()
+            return [self._to_event(e) for e in events], total
+        finally:
+            db.close()
 
     def get_recent(self, limit: int = 100) -> list[Event]:
-        records = self._repo.all()
-        events = [Event.from_dict(item) for item in records]
-        events.sort(key=lambda x: x.timestamp or x.created_at or "", reverse=True)
-        return events[:limit]
+        db = SessionLocal()
+        try:
+            events = db.query(EventModel).order_by(EventModel.timestamp.desc()).limit(limit).all()
+            return [self._to_event(e) for e in events]
+        finally:
+            db.close()
 
     def get_by_id(self, event_id: str) -> Optional[Event]:
-        for item in self._repo.all():
-            if str(item.get("id")) == str(event_id):
-                return Event.from_dict(item)
-        return None
+        db = SessionLocal()
+        try:
+            event = db.query(EventModel).filter(EventModel.id == str(event_id)).first()
+            return self._to_event(event) if event else None
+        finally:
+            db.close()
 
     def recent_by_pet(self, pet_id: str, limit: int = 50) -> list[Event]:
         events, _ = self.get_by_pet(pet_id, limit=limit)
         return events
 
     def update_feedback(self, event_id: str, feedback: str) -> Optional[Event]:
-        with self._lock:
-            records = self._repo.all()
-            for idx, item in enumerate(records):
-                if str(item.get("id")) == str(event_id):
-                    item["feedback"] = feedback if feedback is not None else ""
-                    records[idx] = item
-                    self._repo.save_all(records)
-                    return Event.from_dict(item)
+        with get_db_session() as db:
+            event = db.query(EventModel).filter(EventModel.id == str(event_id)).first()
+            if event:
+                event.feedback = feedback if feedback is not None else ""
+                return self._to_event(event)
         return None
 
 
 class ReportRepository:
+    """报告仓库 - SQLite 实现"""
+
     def __init__(self):
-        _ensure_dir(os.path.join(STORAGE_DIR, "reports"))
-        self._lock = threading.Lock()
+        init_db()
+
+    def _to_report(self, model: ReportModel) -> DailyReport:
+        return DailyReport(
+            date=model.date,
+            pet_id=model.pet_id,
+            pet_name=model.pet_name,
+            health_score=model.health_score,
+            health_status=model.health_status,
+            total_events=model.total_events,
+            alert_count=model.alert_count,
+            event_breakdown=model.event_breakdown or {},
+            hourly_chart=model.hourly_chart or {},
+            top_alerts=model.top_alerts or [],
+            suggestions=model.suggestions or [],
+        )
 
     def save_report(self, report: DailyReport) -> str:
-        report_dir = os.path.join(STORAGE_DIR, "reports")
-        _ensure_dir(report_dir)
-        path = os.path.join(report_dir, f"{report.date or now_iso()[:10]}.json")
-        payload = report.to_dict()
-        with _global_write_lock:
-            with self._lock:
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, ensure_ascii=False, indent=2)
-        return path
+        with get_db_session() as db:
+            existing = db.query(ReportModel).filter(
+                ReportModel.date == report.date,
+                ReportModel.pet_id == report.pet_id
+            ).first()
+
+            if existing:
+                for key, value in report.to_dict().items():
+                    if hasattr(existing, key):
+                        setattr(existing, key, value)
+            else:
+                db.add(ReportModel(**report.to_dict()))
+        return report.date
 
     def get_report(self, date: str, pet_id: str) -> Optional[DailyReport]:
-        path = os.path.join(STORAGE_DIR, "reports", f"{date}.json")
-        if not os.path.exists(path):
-            return None
+        db = SessionLocal()
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            report = DailyReport.from_dict(data)
-            if pet_id and str(report.pet_id) != str(pet_id):
-                return None
-            return report
-        except Exception:
-            return None
+            report = db.query(ReportModel).filter(
+                ReportModel.date == date,
+                ReportModel.pet_id == pet_id
+            ).first()
+            return self._to_report(report) if report else None
+        finally:
+            db.close()

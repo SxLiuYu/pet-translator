@@ -58,8 +58,7 @@ def test_report_persistence(tmp_path: "pathlib.Path") -> None:
     repo.STORAGE_DIR = str(data_dir)
     rr = ReportRepository()
     report = DailyReport(date="2026-07-16", pet_id="pet_001", pet_name="旺财", total_events=5, alert_count=1)
-    report_path = rr.save_report(report)
-    assert os.path.exists(report_path)
+    rr.save_report(report)
     loaded = rr.get_report("2026-07-16", "pet_001")
     assert loaded is not None
     assert loaded.pet_name == "旺财"

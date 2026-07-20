@@ -26,6 +26,7 @@ from notifier.wechat import send_pet_report, send_alert
 from storage.schema import Event, Pet
 from storage.repository import EventRepository, PetRepository, ReportRepository
 from auth.router import router as auth_router
+from audio_visual_fusion import AudioVisualFusionEngine, get_fusion_engine
 
 # ========== 日志 ==========
 logging.basicConfig(
@@ -81,6 +82,46 @@ app.add_middleware(
 
 # 挂载认证路由
 app.include_router(auth_router)
+
+
+
+@app.post("/api/fusion/analyze")
+async def fusion_analyze(request: FusionAnalyzeRequest):
+    """融合分析端点 - 结合音频和视觉数据进行行为分析"""
+    global fusion_results
+    
+    fusion_engine = get_fusion_engine()
+    
+    result = fusion_engine.analyze(
+        audio_data=request.audio.model_dump(),
+        visual_data=request.visual.model_dump()
+    )
+    
+    response = FusionResponse(
+        behavior=result.get("behavior", "unknown"),
+        confidence=result.get("confidence", 0.0),
+        sources=result.get("sources", ["audio", "visual"]),
+        audio_behavior=request.audio.behavior,
+        visual_behavior=request.visual.behavior,
+        audio_confidence=request.audio.confidence,
+        visual_confidence=request.visual.confidence,
+        interpretation=result.get("interpretation", ""),
+        suggestion=result.get("suggestion", ""),
+        is_alert=result.get("is_alert", False),
+        timestamp=datetime.now().isoformat()
+    )
+    
+    fusion_results.append(response)
+    
+    return response
+
+
+@app.get("/api/fusion/results")
+async def fusion_results_endpoint():
+    """获取所有融合分析结果"""
+    return fusion_results
+
+
 
 
 
@@ -140,6 +181,44 @@ class VisualBehaviorResponse(BaseModel):
     pet_id: Optional[str] = None
 
 
+class AudioInput(BaseModel):
+    animal: str
+    behavior: str
+    confidence: float
+    is_pet_sound: bool
+    is_alert: bool
+    suggestion: str
+
+
+class VisualInput(BaseModel):
+    behavior: str
+    confidence: float
+    activity_level: str
+    is_destructive: bool
+    description: str
+    detections: list
+
+
+class FusionAnalyzeRequest(BaseModel):
+    pet_id: Optional[str] = None
+    audio: AudioInput
+    visual: VisualInput
+
+
+class FusionResponse(BaseModel):
+    behavior: str
+    confidence: float
+    sources: list[str]
+    audio_behavior: str
+    visual_behavior: str
+    audio_confidence: float
+    visual_confidence: float
+    interpretation: str
+    suggestion: str
+    is_alert: bool
+    timestamp: str
+
+
 # ========== WebSocket 连接管理 ==========
 class ConnectionManager:
     def __init__(self):
@@ -170,6 +249,8 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+fusion_engine = None
+fusion_results = []
 
 
 # ========== 音频分析路由 ==========
