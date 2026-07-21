@@ -14,12 +14,16 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from fastapi import FastAPI, File, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
 from config import is_production, run_security_checks
+from rate_limiter import limiter
 from audio_classifier.classifier import AudioClassifier
 from audio_visual_fusion import AudioVisualFusionEngine, get_fusion_engine
 from behavior_analyzer.rules import BehaviorEvent, get_engine
@@ -78,6 +82,10 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+# ========== 限流配置 ==========
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ========== CORS 配置 ==========
 import os
@@ -300,7 +308,8 @@ async def health():
 
 
 @app.post("/api/upload_audio", response_model=BehaviorResult, tags=["分析"])
-async def upload_audio(file: UploadFile = File(...), pet_id: Optional[str] = None):
+@limiter.limit("10/minute")
+async def upload_audio(request: Request, file: UploadFile = File(...), pet_id: Optional[str] = None):
     """上传音频文件进行声纹 + 行为分析"""
     tmp_path = None
     try:
@@ -590,7 +599,8 @@ async def camera_snapshot(name: str, annotated: bool = True):
 
 
 @app.post("/api/camera/detect", tags=["视觉"])
-async def camera_detect(name: str, pet_id: Optional[str] = None):
+@limiter.limit("30/minute")
+async def camera_detect(request: Request, name: str, pet_id: Optional[str] = None):
     """
     对摄像头最新帧进行 YOLOv8 视觉行为检测
     ?name=cam1

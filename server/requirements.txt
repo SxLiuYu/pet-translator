@@ -30,6 +30,7 @@ Pillow==10.1.0
 python-dotenv==1.0.1
 pydantic==2.5.3
 requests==2.31.0
+slowapi==0.1.9
 
 # 开发
 pytest==7.4.4

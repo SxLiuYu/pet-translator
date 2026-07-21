@@ -280,3 +280,43 @@ def test_camera_detection_persists_and_fuses_visual_result(app, monkeypatch):
     assert stored is not None
     assert stored.source_type == "visual"
     assert stored.evidence_paths["image"].endswith(".jpg")
+
+
+class TestRateLimiting:
+    def test_auth_login_rate_limited(self, app):
+        """Auth login endpoint should return 429 after 5 attempts in a minute."""
+        from app import limiter
+        limiter.reset()
+        client = build_client(app)
+        statuses = []
+        for _ in range(6):
+            resp = client.post(
+                "/api/auth/login",
+                json={"username": "nonexistent", "password": "wrong"},
+            )
+            statuses.append(resp.status_code)
+        assert 429 in statuses, f"Expected 429 in responses, got {statuses}"
+        assert statuses[-1] == 429
+
+    def test_upload_audio_rate_limited(self, app, tmp_path, monkeypatch):
+        """Upload audio endpoint should return 429 after 10 attempts."""
+        from app import limiter
+        limiter.reset()
+        monkeypatch.setattr(app_module, "_load_audio", lambda path: ([0.0] * 1600, 16000), raising=False)
+        monkeypatch.setenv("PET_ID", "pet_1")
+        client = build_client(app)
+        client.post("/api/pets", json={"pet_id": "pet_1", "name": "旺财", "species": "狗"})
+        wav_path = tmp_path / "pet.wav"
+        wav_path.write_bytes(b"RIFF" + b"\x00" * 100)
+
+        statuses = []
+        for _ in range(12):
+            with open(wav_path, "rb") as f:
+                resp = client.post(
+                    "/api/upload_audio",
+                    params={"pet_id": "pet_1"},
+                    files={"file": ("pet.wav", f, "audio/wav")},
+                )
+            statuses.append(resp.status_code)
+        assert 429 in statuses, f"Expected 429 in responses, got {statuses}"
+        assert statuses[-1] == 429

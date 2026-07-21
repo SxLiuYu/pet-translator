@@ -1,7 +1,9 @@
 ﻿"""auth/router.py - 认证相关 API 路由"""
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from auth.database import create_user, authenticate_user, init_db
 from auth.dependencies import create_access_token, get_current_user
@@ -10,10 +12,12 @@ from auth.schemas import UserRegister, UserLogin, UserResponse, TokenResponse
 logger = logging.getLogger("pet_translator.auth")
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
+limiter = Limiter(key_func=get_remote_address)
 
 
 @router.post("/register", response_model=TokenResponse)
-async def register(req: UserRegister):
+@limiter.limit("5/minute")
+async def register(request: Request, req: UserRegister):
     """用户注册"""
     user = create_user(
         username=req.username,
@@ -35,7 +39,8 @@ async def register(req: UserRegister):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(req: UserLogin):
+@limiter.limit("5/minute")
+async def login(request: Request, req: UserLogin):
     """用户登录"""
     user = authenticate_user(username=req.username, password=req.password)
     if user is None:
