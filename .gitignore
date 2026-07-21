@@ -31,3 +31,9 @@ evidence/
 
 # Local metadata
 .DS_Store
+
+# ML Models (download via script)
+models/yamnet.tflite
+yolov8n.pt
+yolov8s.pt
+yolov5nu.pt

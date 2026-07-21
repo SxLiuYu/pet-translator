@@ -1,0 +1,294 @@
+﻿
+# ========== 融合分析请求/响应模型 ==========
+
+class AudioInput(BaseModel):
+    animal: Optional[str] = None
+    behavior: str = ""
+    confidence: float = 0.0
+    is_pet_sound: bool = False
+    is_alert: bool = False
+    suggestion: str = ""
+
+
+class VisualInput(BaseModel):
+    behavior: str = ""
+    confidence: float = 0.0
+    activity_level: str = ""
+    is_destructive: bool = False
+    description: str = ""
+    detections: list = []
+
+
+class FusionAnalyzeRequest(BaseModel):
+    pet_id: Optional[str] = None
+    audio: Optional[AudioInput] = None
+    visual: Optional[VisualInput] = None
+
+
+class FusionResponse(BaseModel):
+    behavior: str
+    confidence: float
+    sources: list[str]
+    audio_behavior: str = ""
+    visual_behavior: str = ""
+    audio_confidence: float = 0.0
+    visual_confidence: float = 0.0
+    interpretation: str = ""
+    suggestion: str = ""
+    is_alert: bool = False
+    timestamp: str = ""
+
+
+class CameraAnalysisRequest(BaseModel):
+    camera_name: str
+    enable_continuous: bool = True
+    analysis_interval: float = 1.0  # 秒
+
+
+class CameraAnalysisResponse(BaseModel):
+    camera_name: str
+    running: bool
+    frames_analyzed: int
+    current_behavior: Optional[dict] = None
+
+
+# ========== WebSocket 连接管理 ==========
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self.active_connections.append(ws)
+        logger.info(f"👤 客户端连接，当前 {len(self.active_connections)} 个在线")
+
+    def disconnect(self, ws: WebSocket):
+        self.active_connections.remove(ws)
+
+    async def broadcast(self, message: dict):
+        for conn in list(self.active_connections):
+            try:
+                await conn.send_json(message)
+            except Exception:
+                pass
+
+    async def broadcast_bytes(self, message_type: str, data: bytes):
+        """广播二进制帧（JPEG）"""
+        for conn in list(self.active_connections):
+            try:
+                await conn.send_bytes(data)
+            except Exception:
+                pass
+
+manager = ConnectionManager()
+
+
+# ========== 融合分析端点 ==========
+
+@app.post("/api/fusion/analyze", response_model=FusionResponse)
+async def fusion_analyze(req: FusionAnalyzeRequest):
+    """融合音频和视觉分析结果"""
+    global fusion_engine, fusion_results
+    
+    pet_id = req.pet_id or "default"
+    
+    # 添加音频结果
+    if req.audio:
+        fusion_engine.add_audio_result(pet_id, req.audio.model_dump())
+    
+    # 添加视觉结果
+    if req.visual:
+        fusion_engine.add_visual_result(pet_id, req.visual.model_dump())
+    
+    # 执行融合
+    result = fusion_engine.fuse(pet_id)
+    
+    if result:
+        result_dict = result.to_dict()
+        fusion_results.append(result_dict)
+        # 只保留最近 100 条
+        if len(fusion_results) > 100:
+            fusion_results = fusion_results[-100:]
+        return FusionResponse(**result_dict)
+    
+    return FusionResponse(
+        behavior="unknown",
+        confidence=0.0,
+        sources=[],
+        timestamp=datetime.now().isoformat(),
+    )
+
+
+@app.get("/api/fusion/results", response_model=list[FusionResponse])
+async def fusion_get_results(limit: int = 10):
+    """获取最近的融合结果"""
+    results = fusion_results[-limit:]
+    return [FusionResponse(**r) for r in results]
+
+
+# ========== 摄像头持续分析端点 ==========
+
+@app.post("/api/camera/analyze", response_model=CameraAnalysisResponse)
+async def camera_analyze(req: CameraAnalysisRequest):
+    """启动/停止摄像头持续分析"""
+    global camera_manager, vision_detector
+    
+    cam = camera_manager.get(req.camera_name)
+    if not cam:
+        return CameraAnalysisResponse(
+            camera_name=req.camera_name,
+            running=False,
+            frames_analyzed=0,
+        )
+    
+    if req.enable_continuous:
+        # 启动后台分析
+        cam.start_analysis(interval=req.analysis_interval)
+        logger.info(f"📹 摄像头 [{req.camera_name}] 开始持续分析")
+    else:
+        # 停止分析
+        cam.stop_analysis()
+        logger.info(f"📹 摄像头 [{req.camera_name}] 停止分析")
+    
+    return CameraAnalysisResponse(
+        camera_name=req.camera_name,
+        running=cam.is_analyzing(),
+        frames_analyzed=cam.frames_analyzed,
+        current_behavior=cam.get_current_behavior(),
+    )
+
+
+@app.get("/api/camera/{camera_name}/status", response_model=CameraAnalysisResponse)
+async def camera_status(camera_name: str):
+    """获取摄像头分析状态"""
+    global camera_manager
+    
+    cam = camera_manager.get(camera_name)
+    if not cam:
+        return CameraAnalysisResponse(
+            camera_name=camera_name,
+            running=False,
+            frames_analyzed=0,
+        )
+    
+    return CameraAnalysisResponse(
+        camera_name=camera_name,
+        running=cam.is_analyzing(),
+        frames_analyzed=cam.frames_analyzed,
+        current_behavior=cam.get_current_behavior(),
+    )
+
+
+# ========== 辅助函数 ==========
+
+def _load_audio(path: str):
+    """加载音频文件，返回 (numpy_array, sample_rate)"""
+    import wave
+
+    try:
+        with wave.open(path, "rb") as wf:
+            sr = wf.getframerate()
+            nframes = wf.getnframes()
+            raw = wf.readframes(nframes)
+            audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+            return audio, sr
+    except wave.Error:
+        pass
+
+    try:
+        import librosa
+        audio, sr = librosa.load(path, sr=16000, mono=True)
+        return audio.astype(np.float32), sr
+    except ImportError:
+        raise RuntimeError("无法解码音频，请安装 librosa: pip install librosa")
+
+
+def _get_period() -> str:
+    from behavior_analyzer.rules import BehaviorRulesEngine
+    engine = BehaviorRulesEngine()
+    return engine._get_time_period(datetime.now().hour)
+
+
+def _safe_str(value: Optional[str], default: str = "") -> str:
+    if value is None:
+        return default
+    return str(value).strip()
+
+
+def _read_pet_id_from_request() -> Optional[str]:
+    return None
+
+
+def _bootstrap_pets(pet_repo: PetRepository) -> None:
+    if not pet_repo or not pet_repo.get_all():
+        pet_repo.create(Pet(id="pet_001", name="旺财", species="狗"))
+        pet_repo.create(Pet(id="pet_002", name="咪咪", species="猫"))
+
+
+def _ensure_evidence_dirs() -> None:
+    base_dir = Path(__file__).resolve().parent.parent
+    Path(base_dir, "evidence", "audio").mkdir(parents=True, exist_ok=True)
+    Path(base_dir, "evidence", "img").mkdir(parents=True, exist_ok=True)
+
+
+def _save_evidence(src_path: str, relative_path: str) -> Optional[str]:
+    base_dir = Path(__file__).resolve().parent.parent
+    target_path = base_dir / "evidence" / relative_path
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    Path(src_path).replace(target_path)
+    return str(target_path)
+
+
+def _save_bytes_as_evidence(data: bytes, relative_path: str) -> Optional[str]:
+    base_dir = Path(__file__).resolve().parent.parent
+    target_path = base_dir / "evidence" / relative_path
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_bytes(data)
+    return str(target_path)
+
+
+def _broadcast_behavior_result(result: BehaviorResult) -> None:
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(manager.broadcast({
+                "type": "behavior_alert" if result.is_alert else "behavior_update",
+                "data": result.model_dump(),
+            }))
+    except Exception as broadcast_error:
+        logger.warning(f"⚠️ 广播失败: {broadcast_error}")
+
+
+def _store_event(
+    pet_id: Optional[str],
+    classification: dict,
+    analysis: dict,
+    evidence: dict,
+    source: str,
+) -> dict:
+    if not event_repo:
+        return {}
+    event = Event(
+        id=f"evt_{datetime.now().timestamp():.0f}",
+        pet_id=pet_id or "default",
+        timestamp=datetime.now().isoformat(),
+        source_type="audio",
+        source_ref=source,
+        animal=classification.get("animal", ""),
+        behavior=classification.get("behavior", ""),
+        confidence=float(classification.get("confidence") or 0.0),
+        is_alert=bool(classification.get("is_alert")),
+        severity=analysis.get("severity", "info"),
+        period=analysis.get("period", ""),
+        interpretation=analysis.get("interpretation", ""),
+        suggestion=analysis.get("suggestion", ""),
+        evidence_paths=evidence,
+    )
+    stored = event_repo.add(event)
+    return stored.to_dict()
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
