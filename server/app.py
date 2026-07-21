@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
+from config import is_production, run_security_checks
 from audio_classifier.classifier import AudioClassifier
 from audio_visual_fusion import AudioVisualFusionEngine, get_fusion_engine
 from behavior_analyzer.rules import BehaviorEvent, get_engine
@@ -63,6 +64,7 @@ async def lifespan(app: FastAPI):
     fusion_engine = get_fusion_engine()
     _bootstrap_pets(pet_repo)
     _ensure_evidence_dirs()
+    run_security_checks()
     logger.info("✅ 系统就绪，等待音频和视频输入...")
     yield
     if camera_manager:
