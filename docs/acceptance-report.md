@@ -1,8 +1,77 @@
-# 可靠性优化验收报告
+# 验收报告
 
-> 日期：2026-07-19
+> 最后更新：2026-07-21
+
+---
+
+## 生产安全加固验收 (2026-07-21)
+
 > 分支：`master`
-> 实施基线：`e93da91a1c525eece8e8c1de7ee07640a53f8fe6`
+> 实施提交：`05d6381`
+
+### 验收范围
+
+环境门控的 JWT/CORS 强制检查、slowapi 内存限流、安全响应头中间件、启动安全自检。
+
+设计文档：`docs/superpowers/specs/2026-07-21-production-security-hardening-design.md`
+
+### 功能验收
+
+| 验收项 | 结果 | 证据 |
+|--------|------|------|
+| `ENVIRONMENT=production` 检查 JWT_SECRET 未设置 → 启动失败 | 通过 | `test_production_mode_raises` |
+| `ENVIRONMENT=production` 检查 CORS_ORIGINS=* → 启动失败 | 通过 | `test_wildcard_flagged` |
+| `ENVIRONMENT=development` 不安全配置仅警告 | 通过 | `test_development_mode_warns_only` |
+| 认证端点 5/min 限流 → 429 | 通过 | `test_auth_login_rate_limited` |
+| 上传端点 10/min 限流 → 429 | 通过 | `test_upload_audio_rate_limited` |
+| 所有响应携带安全头 (X-Content-Type-Options 等) | 通过 | `test_standard_security_headers_present` |
+| 开发模式不返回 HSTS | 通过 | `test_hsts_absent_in_development` |
+
+### 自动化验证
+
+```bash
+python -m pytest tests/ -q
+```
+
+结果：`66 passed, 2 warnings in 1.92s`（+11 项新测试）。
+
+```bash
+python -m compileall -q server tests
+git diff --check
+```
+
+结果：均通过。
+
+应用导入 smoke：30 个路由，`SecureHeadersMiddleware` 和 `CORSMiddleware` 已挂载。
+
+### 新增文件
+
+| 文件 | 用途 |
+|------|------|
+| `server/config.py` | `is_production()`、安全自检 |
+| `server/rate_limiter.py` | 共享 slowapi Limiter 实例 |
+| `server/security_headers.py` | 安全响应头中间件 |
+| `tests/test_config.py` | 7 项安全配置测试 |
+
+### 修改文件
+
+| 文件 | 变更 |
+|------|------|
+| `server/app.py` | 挂载限流器、安全头中间件、启动安全自检、端点装饰器 |
+| `server/auth/router.py` | 登录/注册端点添加限流 |
+| `server/requirements.txt` | 添加 slowapi |
+| `server/requirements-test.txt` | 添加 slowapi |
+| `.env.example` | 添加 ENVIRONMENT、JWT_SECRET、CORS_ORIGINS |
+| `README.md` | 添加生产部署说明、更新边界 |
+| `tests/test_app_api.py` | 添加限流和安全头测试 |
+
+### 结论
+
+安全加固代码、离线测试、字节编译和 diff 检查全部通过，已推送至 `origin/master`。
+
+---
+
+## 可靠性优化验收 (2026-07-19)
 
 ## 1. 验收范围
 
@@ -131,7 +200,7 @@ failed to connect to the docker API at unix:///var/run/docker.sock
 - YAMNet 文件缺失时音频采用降级模式。
 - JSON 存储不是事务数据库。
 - 认证用户尚未隔离 Pet/Event/Report 数据。
-- CORS 全开，尚无 HTTPS、限流、安全头和完整生产密钥管理。
+- ~~CORS 全开，尚无 HTTPS、限流、安全头和完整生产密钥管理。~~ 已于 2026-07-21 生产安全加固迭代解决（限流、安全头、JWT/CORS 强制检查已上线；HTTPS 反向代理仍需部署侧配置）。
 - 当前完整镜像会解析 Torch 的 CUDA 依赖，构建体积和时间较高；后续可单独设计 CPU-only 生产依赖锁定方案。
 - 尚未验收真实模型准确率、物理摄像头、真实音频数据集和完整移动端设备流程。
 
