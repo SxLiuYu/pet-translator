@@ -98,6 +98,27 @@ python app.py
 
 默认使用 JSON 文件保存宠物、事件和报告；融合历史仅保存在当前进程内，服务重启后清空。未提供 `models/yamnet.tflite` 时，音频分类器会明确记录告警并使用降级分类模式。
 
+#### 生产部署
+
+生产环境必须设置以下环境变量，否则启动会失败：
+
+```bash
+export ENVIRONMENT=production
+export JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export CORS_ORIGINS="https://your-app.example.com"
+```
+
+限流策略（按客户端 IP）：
+
+| 端点 | 限流 |
+|------|------|
+| `/api/auth/login`、`/api/auth/register` | 5 次/分钟 |
+| `/api/upload_audio` | 10 次/分钟 |
+| `/api/camera/detect` | 30 次/分钟 |
+| 其他端点 | 100 次/分钟 |
+
+生产模式额外返回 `Strict-Transport-Security` 和 `Content-Security-Policy` 响应头。建议在 FastAPI 前面再加一层 HTTPS 反向代理（nginx/Caddy）。
+
 ### 3. 注册摄像头
 
 ```bash
@@ -202,7 +223,7 @@ GitHub Actions 在每次 push 和 pull request 上执行同一组检查。完整
 - 音视频融合是单进程内存状态，不跨重启持久化。
 - 摄像头行为检测仍由 API 手动触发，没有持续分析 worker。
 - JSON 存储不提供事务数据库语义，用户认证尚未隔离 Pet/Event/Report 数据。
-- CORS 当前全开，生产部署仍需 HTTPS、限流、安全头和强制配置 JWT 密钥。
+- 生产安全加固已上线：`ENVIRONMENT=production` 模式强制检查 `JWT_SECRET` 和 `CORS_ORIGINS`，认证/上传/检测端点已限流，所有响应携带安全头（生产模式额外加 HSTS 和 CSP）。生产部署仍需在前面加 HTTPS 反向代理。
 - 本次离线验收未覆盖真实 YAMNet/YOLO 准确率、物理摄像头或真实音频数据集。
 
 ## 📷 摄像头配置参考
