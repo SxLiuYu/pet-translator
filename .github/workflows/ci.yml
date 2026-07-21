@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: server/requirements-test.txt
+
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip -r server/requirements-test.txt
+
+      - name: Run tests
+        run: python -m pytest tests/ -q -W error::DeprecationWarning
+
+      - name: Compile Python sources
+        run: python -m compileall -q server tests
+
+      - name: Check whitespace
+        run: git diff --check
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Build production image
+        run: docker build --tag pet-translator:ci .
+
+      - name: Smoke-test container health
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          container_name="pet-translator-ci"
+
+          cleanup() {
+            status=$?
+            if (( status != 0 )); then
+              docker logs "$container_name" 2>&1 || true
+            fi
+            docker rm --force "$container_name" >/dev/null 2>&1 || true
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          docker run --detach \
+            --name "$container_name" \
+            --publish 127.0.0.1:8000:8000 \
+            pet-translator:ci
+
+          ready=false
+          for _ in {1..90}; do
+            if curl --fail --silent \
+              --max-time 2 \
+              --output /tmp/pet-translator-health.json \
+              http://127.0.0.1:8000/health; then
+              ready=true
+              break
+            fi
+            if [[ "$(docker inspect --format '{{.State.Running}}' "$container_name")" != true ]]; then
+              echo "Container exited before becoming healthy" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
+          if [[ "$ready" != true ]]; then
+            echo "Container did not become healthy within 180 seconds" >&2
+            exit 1
+          fi
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("/tmp/pet-translator-health.json").read_text())
+          assert payload["status"] == "ok", payload
+          assert payload["model_loaded"] is True, payload
+          assert isinstance(payload["pets"], list), payload
+          assert isinstance(payload["events_today"], int), payload
+          assert isinstance(payload["cameras"], dict), payload
+          print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+          PY

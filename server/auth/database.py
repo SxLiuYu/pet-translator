@@ -4,10 +4,10 @@ SQLite 数据库 - 用户模型与 CRUD 操作
 """
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
-from passlib.context import CryptContext
+import bcrypt
 from sqlalchemy import Column, Integer, String, DateTime, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -24,8 +24,21 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# 密码哈希上下文
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def _utc_now() -> datetime:
+    """Return naive UTC for the existing SQLite DateTime columns."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def _verify_password(password: str, password_hash: str) -> bool:
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    except (TypeError, ValueError):
+        return False
 
 
 class UserModel(Base):
@@ -37,8 +50,8 @@ class UserModel(Base):
     email = Column(String(120), unique=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
     display_name = Column(String(100), default="")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utc_now)
+    updated_at = Column(DateTime, default=_utc_now, onupdate=_utc_now)
 
 
 def init_db():
@@ -68,10 +81,10 @@ def create_user(username: str, email: str, password: str, display_name: str = ""
         user = UserModel(
             username=username,
             email=email,
-            hashed_password=pwd_context.hash(password),
+            hashed_password=_hash_password(password),
             display_name=display_name or username,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=_utc_now(),
+            updated_at=_utc_now(),
         )
         db.add(user)
         db.commit()
@@ -100,7 +113,7 @@ def authenticate_user(username: str, password: str) -> Optional[dict]:
         ).first()
         if not user:
             return None
-        if not pwd_context.verify(password, user.hashed_password):
+        if not _verify_password(password, user.hashed_password):
             return None
         return {
             "id": user.id,

@@ -7,18 +7,20 @@ app.py
 import logging
 import os
 import tempfile
+import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from audio_classifier.classifier import AudioClassifier
+from audio_visual_fusion import AudioVisualFusionEngine, get_fusion_engine
 from behavior_analyzer.rules import BehaviorEvent, get_engine
 from camera.camera_manager import get_camera_manager, BaseCamera, CameraFrame
 from camera.behavior_detector import BehaviorDetector
@@ -43,12 +45,13 @@ vision_detector: BehaviorDetector = None
 pet_repo: Optional[PetRepository] = None
 event_repo: Optional[EventRepository] = None
 report_repo: Optional[ReportRepository] = None
+fusion_engine: Optional[AudioVisualFusionEngine] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global classifier, behavior_engine, camera_manager, vision_detector
-    global pet_repo, event_repo, report_repo
+    global pet_repo, event_repo, report_repo, fusion_engine
     logger.info("🚀 毛孩子翻译官 启动中...")
     classifier = AudioClassifier()
     behavior_engine = get_engine()
@@ -57,6 +60,7 @@ async def lifespan(app: FastAPI):
     pet_repo = PetRepository()
     event_repo = EventRepository()
     report_repo = ReportRepository()
+    fusion_engine = get_fusion_engine()
     _bootstrap_pets(pet_repo)
     _ensure_evidence_dirs()
     logger.info("✅ 系统就绪，等待音频和视频输入...")
@@ -73,9 +77,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ========== CORS 配置 ==========
+import os
+cors_origins_str = os.getenv("CORS_ORIGINS", "*")
+if cors_origins_str == "*":
+    allow_origins = ["*"]
+else:
+    allow_origins = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
+    logger.info(f"CORS allowed origins: {allow_origins}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allow_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -139,6 +152,7 @@ class BehaviorResult(BaseModel):
     timestamp: str
     event_id: Optional[str] = None
     evidence: Optional[dict] = None
+    fusion: Optional[dict] = None
 
 
 class DailyReport(BaseModel):
@@ -155,8 +169,11 @@ class DailyReport(BaseModel):
 
 
 class StatusResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     status: str
     model_loaded: bool
+    pets: list[dict]
     events_today: int
     cameras: dict
 
@@ -179,6 +196,8 @@ class VisualBehaviorResponse(BaseModel):
     detections: list
     timestamp: str
     pet_id: Optional[str] = None
+    event_id: Optional[str] = None
+    fusion: Optional[dict] = None
 
 
 class AudioInput(BaseModel):
@@ -278,7 +297,7 @@ async def health():
 
 
 @app.post("/api/upload_audio", response_model=BehaviorResult, tags=["分析"])
-async def upload_audio(file: UploadFile = File(...)):
+async def upload_audio(file: UploadFile = File(...), pet_id: Optional[str] = None):
     """上传音频文件进行声纹 + 行为分析"""
     tmp_path = None
     try:
@@ -294,7 +313,7 @@ async def upload_audio(file: UploadFile = File(...)):
         audio_array, sr = _load_audio(tmp_path)
         logger.info(f"📥 收到音频: {file.filename}, {len(audio_array)} samples @ {sr}Hz")
 
-        pet_id = _read_pet_id_from_request()
+        pet_id = _read_pet_id_from_request(pet_id)
         classification = classifier.classify(audio_array, sr)
         logger.info(f"🔍 声纹分类: {classification}")
 
@@ -307,7 +326,7 @@ async def upload_audio(file: UploadFile = File(...)):
                    "period": _get_period(),
                    "timestamp": datetime.now().isoformat()},
             )
-            await _broadcast_behavior_result(result)
+            _broadcast_behavior_result(result)
             return result
 
         event = BehaviorEvent(
@@ -324,7 +343,7 @@ async def upload_audio(file: UploadFile = File(...)):
         if tmp_path and os.path.exists(tmp_path):
             try:
                 suffix = Path(file.filename).suffix or ".wav"
-                evidence_path = _save_evidence(tmp_path, f"audio/evt_{datetime.now().timestamp():.0f}{suffix}")
+                evidence_path = _save_evidence(tmp_path, f"audio/evt_{uuid.uuid4().hex[:12]}{suffix}")
                 if evidence_path:
                     evidence["audio"] = evidence_path
             except Exception as evidence_error:
@@ -337,15 +356,17 @@ async def upload_audio(file: UploadFile = File(...)):
             evidence=evidence,
             source="upload_audio",
         )
+        fusion = _add_audio_fusion(pet_id, classification, analysis)
         result = BehaviorResult(
             **{**classification, **analysis},
             event_id=persisted_event.get("id"),
             evidence=persisted_event.get("evidence_paths", evidence),
+            fusion=fusion,
         )
 
         await manager.broadcast({
             "type": "behavior_alert" if result.is_alert else "behavior_update",
-            "data": result.dict(),
+            "data": result.model_dump(),
         })
 
         if result.is_alert:
@@ -447,11 +468,14 @@ async def delete_pet(pet_id: str):
 
 
 @app.get("/api/events", tags=["数据"])
-async def get_events(pet_id: Optional[str] = None, limit: int = 50):
+async def get_events(
+    pet_id: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=100),
+):
     """获取最近的行为事件"""
     if not event_repo:
         return JSONResponse({"error": "存储未初始化"}, status_code=500)
-    target_pet_id = pet_id or _read_pet_id_from_request()
+    target_pet_id = _safe_str(pet_id) or None
     if target_pet_id:
         events = event_repo.recent_by_pet(target_pet_id, limit=limit)
     else:
@@ -563,7 +587,7 @@ async def camera_snapshot(name: str, annotated: bool = True):
 
 
 @app.post("/api/camera/detect", tags=["视觉"])
-async def camera_detect(name: str):
+async def camera_detect(name: str, pet_id: Optional[str] = None):
     """
     对摄像头最新帧进行 YOLOv8 视觉行为检测
     ?name=cam1
@@ -573,6 +597,23 @@ async def camera_detect(name: str):
         return JSONResponse({"error": f"摄像头 [{name}] 无可用帧"}, status_code=404)
 
     result = vision_detector.detect(frame.image)
+    target_pet_id = _read_pet_id_from_request(pet_id)
+    visual_payload = {
+        "animal": _animal_from_detections(result.detections),
+        "behavior": result.behavior,
+        "confidence": result.confidence,
+        "is_destructive": result.is_destructive,
+        "description": result.description,
+        "timestamp": datetime.fromtimestamp(result.timestamp, timezone.utc).isoformat(),
+    }
+    event_id = None
+    fusion = None
+    if result.behavior not in {"unknown", "no_pet_detected"}:
+        stored = _store_visual_event(target_pet_id, name, visual_payload, frame.jpeg_bytes)
+        event_id = stored.get("id")
+        if fusion_engine:
+            fusion = fusion_engine.add_visual_result(target_pet_id, visual_payload).to_dict()
+            await manager.broadcast({"type": "fusion_update", "data": fusion})
     return VisualBehaviorResponse(
         behavior=result.behavior,
         confidence=result.confidence,
@@ -587,8 +628,24 @@ async def camera_detect(name: str):
             }
             for d in result.detections
         ],
-        timestamp=datetime.fromtimestamp(result.timestamp).isoformat(),
+        timestamp=visual_payload["timestamp"],
+        pet_id=target_pet_id,
+        event_id=event_id,
+        fusion=fusion,
     )
+
+
+@app.get("/api/fusions", tags=["分析"])
+async def recent_fusions(
+    pet_id: Optional[str] = None,
+    limit: int = Query(10, ge=1, le=100),
+):
+    """获取指定宠物最近的音视频融合结论。"""
+    target_pet_id = _read_pet_id_from_request(pet_id)
+    if not fusion_engine:
+        return {"pet_id": target_pet_id, "fusions": [], "total": 0}
+    items = [item.to_dict() for item in fusion_engine.get_recent_fusions(target_pet_id, limit)]
+    return {"pet_id": target_pet_id, "fusions": items, "total": len(items)}
 
 
 @app.websocket("/ws/camera")
@@ -689,8 +746,8 @@ def _safe_str(value: Optional[str], default: str = "") -> str:
     return str(value).strip()
 
 
-def _read_pet_id_from_request() -> Optional[str]:
-    return None
+def _read_pet_id_from_request(pet_id: Optional[str] = None, default: str = "default") -> str:
+    return _safe_str(pet_id or os.getenv("PET_ID"), default)
 
 
 def _bootstrap_pets(pet_repo: PetRepository) -> None:
@@ -744,7 +801,7 @@ def _store_event(
     if not event_repo:
         return {}
     event = Event(
-        id=f"evt_{datetime.now().timestamp():.0f}",
+        id=f"evt_{uuid.uuid4().hex[:12]}",
         pet_id=pet_id or "default",
         timestamp=datetime.now().isoformat(),
         source_type="audio",
@@ -761,6 +818,49 @@ def _store_event(
     )
     stored = event_repo.add(event)
     return stored.to_dict()
+
+
+def _add_audio_fusion(pet_id: str, classification: dict, analysis: dict) -> Optional[dict]:
+    if not fusion_engine:
+        return None
+    payload = {**classification, **analysis, "timestamp": datetime.now(timezone.utc).isoformat()}
+    return fusion_engine.add_audio_result(pet_id, payload).to_dict()
+
+
+def _animal_from_detections(detections: list) -> str:
+    classes = {getattr(item, "class_name", "") for item in detections}
+    if "dog" in classes:
+        return "狗"
+    if "cat" in classes:
+        return "猫"
+    return "宠物"
+
+
+def _store_visual_event(pet_id: str, camera_name: str, result: dict, jpeg: bytes) -> dict:
+    if not event_repo:
+        return {}
+    event_id = f"evt_{uuid.uuid4().hex[:12]}"
+    evidence = {}
+    if jpeg:
+        path = _save_bytes_as_evidence(jpeg, f"img/{event_id}.jpg")
+        if path:
+            evidence["image"] = path
+    event = Event(
+        id=event_id,
+        pet_id=pet_id,
+        timestamp=result["timestamp"],
+        source_type="visual",
+        source_ref=camera_name,
+        animal=result.get("animal", "宠物"),
+        behavior=result.get("behavior", "unknown"),
+        confidence=float(result.get("confidence") or 0.0),
+        is_alert=bool(result.get("is_destructive")),
+        severity="warning" if result.get("is_destructive") else "info",
+        interpretation=result.get("description", ""),
+        suggestion="立即查看现场" if result.get("is_destructive") else "继续观察",
+        evidence_paths=evidence,
+    )
+    return event_repo.add(event).to_dict()
 
 
 if __name__ == "__main__":

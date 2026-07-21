@@ -2,10 +2,12 @@
 # 毛孩子翻译官 - 服务端依赖
 # ============================================
 
+-r requirements-auth.txt
+
 # Web 框架
-fastapi==0.95.2
+fastapi==0.115.0
 uvicorn[standard]==0.27.1
-python-multipart==0.0.15
+python-multipart==0.0.20
 
 # 音频处理
 librosa==0.10.1

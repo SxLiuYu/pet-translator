@@ -370,16 +370,7 @@ class BehaviorDetector:
         """
         ts = time.time()
 
-        # 懒加载模型
-        if not self._model_loaded:
-            self._ensure_model()
-        if self.use_clip and not self._clip_initialized:
-            self._init_clip()
-
-        if self.model is None:
-            return VisualBehavior(timestamp=ts, description="模型未加载", skipped=False, inference_ms=0.0)
-
-        # 1. 运动检测 (快速跳过无运动帧)
+        # 1. 运动检测 (快速跳过无运动帧，也避免为静止画面加载模型)
         motion_score = self._detect_motion(frame)
         has_motion = motion_score > self.motion_threshold if hasattr(self, "motion_threshold") else True
 
@@ -391,6 +382,15 @@ class BehaviorDetector:
                 inference_ms=0.0,
                 description="无运动",
             )
+
+        # 懒加载模型
+        if not self._model_loaded:
+            self._ensure_model()
+        if self.use_clip and not self._clip_initialized:
+            self._init_clip()
+
+        if self.model is None:
+            return VisualBehavior(timestamp=ts, description="模型未加载", skipped=False, inference_ms=0.0)
 
         # 2. 推理
         yolo_start = time.time()

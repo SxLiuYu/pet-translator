@@ -2,12 +2,34 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
 
 from auth.database import init_db, create_user, authenticate_user, get_user_by_id
 from auth.dependencies import create_access_token, decode_access_token
+
+
+def test_auth_import_has_no_deprecation_warnings():
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.path.join(os.path.dirname(__file__), "..", "server")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-W",
+            "error::DeprecationWarning",
+            "-c",
+            "import auth.database; import auth.dependencies",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_create_and_authenticate_user(tmp_path):

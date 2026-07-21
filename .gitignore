@@ -22,6 +22,12 @@ venv/
 *.bak
 *.swp
 
-# Node.js
-/node_modules/
-/test-results/
+# Frontend
+node_modules/
+test-results/
+
+# Runtime data
+evidence/
+
+# Local metadata
+.DS_Store
