@@ -320,3 +320,24 @@ class TestRateLimiting:
             statuses.append(resp.status_code)
         assert 429 in statuses, f"Expected 429 in responses, got {statuses}"
         assert statuses[-1] == 429
+
+
+class TestSecurityHeaders:
+    def test_standard_security_headers_present(self, app):
+        """Every response should include standard security headers."""
+        from app import limiter
+        limiter.reset()
+        client = build_client(app)
+        resp = client.get("/health")
+        assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+        assert resp.headers.get("X-Frame-Options") == "DENY"
+        assert resp.headers.get("X-XSS-Protection") == "1; mode=block"
+        assert resp.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
+
+    def test_hsts_absent_in_development(self, app):
+        """HSTS header should not be set in development mode."""
+        from app import limiter
+        limiter.reset()
+        client = build_client(app)
+        resp = client.get("/health")
+        assert "Strict-Transport-Security" not in resp.headers

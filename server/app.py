@@ -24,6 +24,7 @@ from slowapi.errors import RateLimitExceeded
 
 from config import is_production, run_security_checks
 from rate_limiter import limiter
+from security_headers import SecureHeadersMiddleware
 from audio_classifier.classifier import AudioClassifier
 from audio_visual_fusion import AudioVisualFusionEngine, get_fusion_engine
 from behavior_analyzer.rules import BehaviorEvent, get_engine
@@ -102,6 +103,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(SecureHeadersMiddleware)
 
 # 挂载认证路由
 app.include_router(auth_router)
